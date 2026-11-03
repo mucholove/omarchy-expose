@@ -92,6 +92,32 @@ TestCase {
         compare(AgentModel.fraction(20, 10), 1);
     }
 
+    function test_sessionFilters() {
+        var now = 1000000000;
+        var results = { sessions: [
+            { name: "busy", status: "busy", statusAt: now - 60000 },
+            { name: "wait", status: "idle", statusAt: now - 2 * 3600000 },
+            { name: "old", status: "idle", statusAt: now - 5 * 86400000 },
+            { name: "gone", status: "ended", statusAt: now - 3600000 },
+            { name: "arch", status: "idle", statusAt: now - 1000, archived: true }
+        ] };
+        var counts = AgentModel.filterCounts(results, now, 0);
+        compare(counts.all, 4);
+        compare(counts.working, 1);
+        compare(counts.waiting, 2);
+        compare(counts.ended, 1);
+        compare(AgentModel.filterCounts(results, now, 6 * 3600000).waiting, 1);
+        var names = function (rows) { return rows.filter(function (r) { return r.session; }).map(function (r) { return r.session.name; }); };
+        compare(names(AgentModel.sessionRows(results, now, { status: "waiting" })).join(), "wait,old");
+        compare(names(AgentModel.sessionRows(results, now, { status: "all", maxAgeMs: 86400000 })).join(), "busy,wait,gone");
+        compare(names(AgentModel.sessionRows(results, now, { status: "ended" })).join(), "gone");
+        compare(AgentModel.ageStep(0).ms, 3600000);
+        compare(AgentModel.ageStep(5).ms, 0);
+        compare(AgentModel.ageStep(99).ms, 0);
+        compare(AgentModel.ageStep("x").label, "any time");
+        verify(AgentModel.matchesFilter({ status: "shell", statusAt: now }, "working", 0, now));
+    }
+
     function test_projectLabel() {
         compare(AgentModel.projectLabel("/h/Work/kboom", { repo: "kboom" }, "/h"), "kboom");
         compare(AgentModel.projectLabel("/h/Work/kboom/.claude/worktrees/linux-edge", { repo: "kboom" }, "/h"), "kboom › linux-edge");

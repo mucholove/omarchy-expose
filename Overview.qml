@@ -226,6 +226,15 @@ Item {
     readonly property bool hideAgentWindows: !root.pluginEntry || root.pluginEntry.hideAgentWindows !== false
     readonly property bool showActivity: !root.pluginEntry || root.pluginEntry.showActivity !== false
     readonly property bool showEndedSessions: !root.pluginEntry || root.pluginEntry.showEndedSessions !== false
+    readonly property string sessionStatusFilter: {
+        var value = root.pluginEntry ? String(root.pluginEntry.sessionStatus || "all") : "all";
+        return AgentModel.STATUS_FILTERS.indexOf(value) !== -1 ? value : "all";
+    }
+    readonly property int sessionAgeIndex: {
+        var value = root.pluginEntry ? Number(root.pluginEntry.sessionAgeIndex) : NaN;
+        return isFinite(value) && value >= 0 && value < AgentModel.AGE_STEPS.length
+            ? Math.round(value) : AgentModel.AGE_STEPS.length - 1;
+    }
     readonly property bool showArchivedSessions: !!root.pluginEntry && root.pluginEntry.showArchivedSessions === true
     property string sessionActionMessage: ""
     readonly property bool showOlderSessions: !root.pluginEntry || root.pluginEntry.showOlderSessions !== false
@@ -965,6 +974,17 @@ Item {
 
     function setShowActivity(enabled) {
         root.updatePluginSetting("showActivity", enabled === true);
+    }
+
+    function setSessionStatusFilter(value) {
+        if (AgentModel.STATUS_FILTERS.indexOf(value) !== -1)
+            root.updatePluginSetting("sessionStatus", value);
+    }
+
+    function setSessionAgeIndex(index) {
+        var i = Math.max(0, Math.min(AgentModel.AGE_STEPS.length - 1, Math.round(Number(index))));
+        if (i !== root.sessionAgeIndex)
+            root.updatePluginSetting("sessionAgeIndex", i);
     }
 
     function setShowEndedSessions(enabled) {

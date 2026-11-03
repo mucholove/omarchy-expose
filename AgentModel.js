@@ -143,14 +143,61 @@ function sortedSessions(results, nowMs) {
 // Flat rows for a list: {header: "Working"} entries between {session: {...}} rows.
 // options: {showOlder, showEnded, showArchived}, each on unless set to false
 // (showArchived is off unless true). Archived sessions sort into their own group.
+// Filters for the session list: status pills and a "last activity" slider.
+var STATUS_FILTERS = ["all", "working", "waiting", "ended"];
+var AGE_STEPS = [
+    { label: "1 hour", ms: 3600000 },
+    { label: "6 hours", ms: 6 * 3600000 },
+    { label: "1 day", ms: 86400000 },
+    { label: "3 days", ms: 3 * 86400000 },
+    { label: "7 days", ms: 7 * 86400000 },
+    { label: "any time", ms: 0 }
+];
+
+function ageStep(index) {
+    var i = Math.round(Number(index));
+    return AGE_STEPS[isFinite(i) && i >= 0 && i < AGE_STEPS.length ? i : AGE_STEPS.length - 1];
+}
+
+function sessionBucket(session) {
+    var state = sessionState(session);
+    return state === "shell" ? "working" : state;
+}
+
+// True when the session passes the status pill and was active within maxAgeMs (0 = any).
+function matchesFilter(session, status, maxAgeMs, nowMs) {
+    if (status && status !== "all" && sessionBucket(session) !== status)
+        return false;
+    if (maxAgeMs > 0 && nowMs - (Number(session.statusAt) || 0) > maxAgeMs)
+        return false;
+    return true;
+}
+
+// Counts per status pill among sessions inside the age window (archived ones excluded).
+function filterCounts(results, nowMs, maxAgeMs) {
+    var counts = { all: 0, working: 0, waiting: 0, ended: 0 };
+    var list = results && results.sessions ? results.sessions : [];
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].archived || !matchesFilter(list[i], "all", maxAgeMs, nowMs))
+            continue;
+        counts.all++;
+        counts[sessionBucket(list[i])]++;
+    }
+    return counts;
+}
+
 function sessionRows(results, nowMs, options) {
     var showOlder = options === false ? false : !(options && options.showOlder === false);
     var showEnded = !(options && typeof options === "object" && options.showEnded === false);
     var showArchived = !!(options && typeof options === "object" && options.showArchived === true);
+    var status = options && typeof options === "object" ? options.status : "all";
+    var maxAgeMs = options && typeof options === "object" ? Number(options.maxAgeMs) || 0 : 0;
     var rows = [];
     var last = -1;
     var list = sortedSessions(results, nowMs);
     for (var i = 0; i < list.length; i++) {
+        if (!matchesFilter(list[i], status, maxAgeMs, nowMs))
+            continue;
         var group = sessionGroup(list[i], nowMs);
         if (list[i].archived && !showArchived)
             continue;

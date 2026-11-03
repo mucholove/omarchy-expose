@@ -16,8 +16,14 @@ Item {
     readonly property var rows: AgentModel.sessionRows(sidebar.controller.agentResults, sidebar.controller.nowMs, {
         showOlder: sidebar.controller.showOlderSessions,
         showEnded: sidebar.controller.showEndedSessions,
-        showArchived: sidebar.controller.showArchivedSessions
+        showArchived: sidebar.controller.showArchivedSessions,
+        status: sidebar.controller.sessionStatusFilter,
+        maxAgeMs: AgentModel.ageStep(sidebar.controller.sessionAgeIndex).ms
     })
+    readonly property var counts: AgentModel.filterCounts(sidebar.controller.agentResults, sidebar.controller.nowMs,
+        AgentModel.ageStep(sidebar.controller.sessionAgeIndex).ms)
+    readonly property bool filtered: sidebar.controller.sessionStatusFilter !== "all"
+        || sidebar.controller.sessionAgeIndex < AgentModel.AGE_STEPS.length - 1
 
     implicitWidth: Style.space(290)
 
@@ -36,17 +42,33 @@ Item {
         clip: true
         spacing: Style.spacing.xs
         model: sidebar.settingsShown ? [] : sidebar.rows
+
+        footer: Text {
+            width: list.width
+            height: visible ? Style.space(40) : 0
+            visible: !sidebar.settingsShown && sidebar.rows.length === 0
+            text: "No sessions match."
+            textFormat: Text.PlainText
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            color: Commons.Color.menu.text
+            opacity: 0.5
+            font.family: Style.font.menuFamily
+            font.pixelSize: Style.font.caption
+        }
         boundsBehavior: Flickable.StopAtBounds
 
         header: Item {
             width: list.width
-            height: Style.space(34)
+            height: Style.space(34) + Style.space(40)
 
             Text {
                 anchors.left: parent.left
                 anchors.leftMargin: Style.spacing.sm
-                anchors.verticalCenter: parent.verticalCenter
-                text: sidebar.rows.length ? "AI sessions" : "No AI sessions"
+                anchors.top: parent.top
+                height: Style.space(34)
+                verticalAlignment: Text.AlignVCenter
+                text: sidebar.rows.length || sidebar.filtered ? "AI sessions" : "No AI sessions"
                 textFormat: Text.PlainText
                 color: Commons.Color.menu.text
                 opacity: 0.7
@@ -55,13 +77,127 @@ Item {
                 font.bold: true
             }
 
+            // Filters: status pills and a "last activity" slider. Small on purpose.
+            Item {
+                id: filterBar
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.topMargin: Style.space(34)
+                anchors.leftMargin: Style.spacing.sm
+                anchors.rightMargin: Style.spacing.sm
+                height: Style.space(36)
+
+                Row {
+                    id: pills
+                    spacing: Style.spacing.md
+
+                    Repeater {
+                        model: AgentModel.STATUS_FILTERS
+
+                        Text {
+                            id: pill
+                            required property var modelData
+                            readonly property bool active: sidebar.controller.sessionStatusFilter === modelData
+                            text: modelData + " " + (sidebar.counts[modelData] || 0)
+                            textFormat: Text.PlainText
+                            color: active ? Commons.Color.accent : Commons.Color.menu.text
+                            opacity: active ? 1 : (pillMouse.containsMouse ? 0.9 : 0.5)
+                            font.family: Style.font.menuFamily
+                            font.pixelSize: Style.font.caption
+                            font.bold: active
+                            font.underline: active
+
+                            MouseArea {
+                                id: pillMouse
+                                anchors.fill: parent
+                                anchors.margins: -3
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: sidebar.controller.setSessionStatusFilter(pill.modelData)
+                            }
+                        }
+                    }
+                }
+
+                Item {
+                    id: ageSlider
+                    anchors.left: parent.left
+                    anchors.right: ageLabel.left
+                    anchors.rightMargin: Style.spacing.md
+                    anchors.bottom: parent.bottom
+                    height: Style.space(16)
+                    readonly property int steps: AgentModel.AGE_STEPS.length
+
+                    function indexAt(x) {
+                        return Math.max(0, Math.min(steps - 1, Math.round(x / Math.max(1, width) * (steps - 1))));
+                    }
+
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width
+                        height: 2
+                        radius: 1
+                        color: Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.22)
+                    }
+
+                    Repeater {
+                        model: ageSlider.steps
+
+                        Rectangle {
+                            required property int index
+                            x: index / (ageSlider.steps - 1) * (ageSlider.width - width)
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 4
+                            height: 4
+                            radius: 2
+                            color: Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.4)
+                        }
+                    }
+
+                    Rectangle {
+                        id: knob
+                        width: Style.space(10)
+                        height: width
+                        radius: width / 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: sidebar.controller.sessionAgeIndex / (ageSlider.steps - 1) * (ageSlider.width - width)
+                        color: sidebar.controller.sessionAgeIndex < ageSlider.steps - 1 ? Commons.Color.accent : Commons.Color.menu.text
+                        opacity: sliderMouse.containsMouse || sliderMouse.pressed ? 1 : 0.75
+                    }
+
+                    MouseArea {
+                        id: sliderMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onPressed: function (mouse) { sidebar.controller.setSessionAgeIndex(ageSlider.indexAt(mouse.x)); }
+                        onPositionChanged: function (mouse) { if (pressed) sidebar.controller.setSessionAgeIndex(ageSlider.indexAt(mouse.x)); }
+                    }
+                }
+
+                Text {
+                    id: ageLabel
+                    anchors.right: parent.right
+                    anchors.verticalCenter: ageSlider.verticalCenter
+                    text: sidebar.controller.sessionAgeIndex < AgentModel.AGE_STEPS.length - 1
+                        ? "last " + AgentModel.ageStep(sidebar.controller.sessionAgeIndex).label : "any time"
+                    textFormat: Text.PlainText
+                    color: Commons.Color.menu.text
+                    opacity: 0.6
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.caption
+                }
+            }
+
             Rectangle {
                 id: gear
                 width: Style.space(28)
                 height: width
                 radius: Style.cornerRadius
                 anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.top: parent.top
+                anchors.topMargin: Style.space(3)
                 color: sidebar.settingsShown || gearMouse.containsMouse
                     ? Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.16)
                     : "transparent"
