@@ -223,6 +223,7 @@ Item {
     readonly property var focusedToplevel: Hyprland.activeToplevel
     // On unless switched off: the sidebar lists AI sessions, so their windows stay out of the grid.
     readonly property bool hideAgentWindows: !root.pluginEntry || root.pluginEntry.hideAgentWindows !== false
+    readonly property bool showActivity: !root.pluginEntry || root.pluginEntry.showActivity !== false
     readonly property bool showEndedSessions: !root.pluginEntry || root.pluginEntry.showEndedSessions !== false
     readonly property bool showArchivedSessions: !!root.pluginEntry && root.pluginEntry.showArchivedSessions === true
     property string sessionActionMessage: ""
@@ -914,6 +915,10 @@ Item {
             if (WindowModel.pidFor(root.allToplevels[i]) === target)
                 return root.allToplevels[i];
         return null;
+    }
+
+    function setShowActivity(enabled) {
+        root.updatePluginSetting("showActivity", enabled === true);
     }
 
     function setShowEndedSessions(enabled) {

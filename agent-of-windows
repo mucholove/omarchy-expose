@@ -519,6 +519,128 @@ def free_worktree(path, pid, session_id=""):
                   freedBytes=size)
 
 
+CLK_TCK = os.sysconf("SC_CLK_TCK")
+SAMPLE_GAP = 0.25
+
+
+def snapshot():
+    """One reading of the whole machine: per-core CPU times and per-process ticks/RSS."""
+    cores = []
+    with open("/proc/stat") as f:
+        for line in f:
+            if line.startswith("cpu") and line[3].isdigit():
+                nums = [int(x) for x in line.split()[1:]]
+                idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+                cores.append((idle, sum(nums[:8])))
+    procs = {}
+    page = os.sysconf("SC_PAGE_SIZE")
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "rb") as f:
+                raw = f.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        rparen = raw.rfind(")")
+        fields = raw[rparen + 2:].split()
+        try:
+            procs[int(name)] = (int(fields[11]) + int(fields[12]), int(fields[21]) * page,
+                                raw[raw.find("(") + 1:rparen])
+        except (IndexError, ValueError):
+            continue
+    return {"t": time.monotonic(), "cores": cores, "procs": procs}
+
+
+def read_number(path):
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def gpu_stats():
+    for card in sorted(os.listdir("/sys/class/drm")) if os.path.isdir("/sys/class/drm") else []:
+        base = f"/sys/class/drm/{card}/device"
+        busy = read_number(f"{base}/gpu_busy_percent")
+        if busy is None:
+            continue
+        return {"busy": busy, "vramUsed": read_number(f"{base}/mem_info_vram_used") or 0,
+                "vramTotal": read_number(f"{base}/mem_info_vram_total") or 0}
+    return {}
+
+
+def temperatures():
+    out = {}
+    base = "/sys/class/hwmon"
+    try:
+        for hw in os.listdir(base):
+            try:
+                with open(f"{base}/{hw}/name") as f:
+                    name = f.read().strip()
+            except OSError:
+                continue
+            value = read_number(f"{base}/{hw}/temp1_input")
+            if value is None:
+                continue
+            if name in ("k10temp", "coretemp"):
+                out["cpu"] = value / 1000
+            elif name == "amdgpu":
+                out["gpu"] = value / 1000
+    except OSError:
+        pass
+    return out
+
+
+def meminfo():
+    info = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            key, _, rest = line.partition(":")
+            info[key] = int(rest.split()[0]) * 1024
+    return info
+
+
+def system_stats(a, b):
+    cores = []
+    for (idle0, total0), (idle1, total1) in zip(a["cores"], b["cores"]):
+        span = total1 - total0
+        cores.append(round(100 * (1 - (idle1 - idle0) / span), 1) if span > 0 else 0.0)
+    mem = meminfo()
+    try:
+        load = [float(x) for x in open("/proc/loadavg").read().split()[:3]]
+    except OSError:
+        load = []
+    return {
+        "cores": cores, "cpu": round(sum(cores) / len(cores), 1) if cores else 0.0,
+        "memTotal": mem.get("MemTotal", 0), "memUsed": mem.get("MemTotal", 0) - mem.get("MemAvailable", 0),
+        "swapTotal": mem.get("SwapTotal", 0), "swapUsed": mem.get("SwapTotal", 0) - mem.get("SwapFree", 0),
+        "gpu": gpu_stats(), "temps": temperatures(), "load": load,
+    }
+
+
+def usage_of(root, kids, a, b):
+    """CPU% (of one core; 100 = one core busy), memory and process count of root's tree."""
+    gap = b["t"] - a["t"]
+    ticks, rss, count, top, top_ticks = 0, 0, 0, "", -1
+    stack = [root]
+    while stack:
+        pid = stack.pop()
+        now = b["procs"].get(pid)
+        if now:
+            before = a["procs"].get(pid, now)
+            delta = max(0, now[0] - before[0])
+            ticks += delta
+            rss += now[1]
+            count += 1
+            if delta > top_ticks:
+                top, top_ticks = now[2], delta
+        stack.extend(kids.get(pid, []))
+    return {"cpu": round(100 * ticks / CLK_TCK / gap, 1) if gap > 0 else 0.0,
+            "rssBytes": rss, "procs": count, "top": top}
+
+
 def main():
     argv = sys.argv[1:]
     if argv and argv[0] == "--sizes":
@@ -538,7 +660,15 @@ def main():
     by_agent = {w["agentPid"]: int(k) for k, w in windows.items() if w["agentPid"]}
     found = sessions(by_agent, kids, comm)
     save_git_cache()
-    print(json.dumps({"windows": windows, "sessions": found}, ensure_ascii=False))
+    # Sample after the heavy work, while this process sleeps, so it doesn't count itself.
+    first = snapshot()
+    time.sleep(SAMPLE_GAP)
+    second = snapshot()
+    for item in found:
+        if item.get("live") and item.get("pid"):
+            item["usage"] = usage_of(item["pid"], kids, first, second)
+    print(json.dumps({"windows": windows, "sessions": found, "system": system_stats(first, second)},
+                     ensure_ascii=False))
 
 
 main()

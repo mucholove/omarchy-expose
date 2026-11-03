@@ -258,6 +258,9 @@ function sessionChips(session) {
     var size = bytesText(session.sizeBytes);
     if (size && session.git && session.git.linked && session.cwdExists !== false)
         chips.push({ kind: "size", text: "▤ " + size + " worktree" });
+    var usage = usageChip(session);
+    if (usage)
+        chips.push(usage);
     return chips;
 }
 
@@ -287,4 +290,51 @@ function freeSummary(session) {
     if (session.live)
         parts.push("ends this idle session");
     return parts.join(". ") + ".";
+}
+
+// ---- Activity monitor ----
+
+// 100 means one core fully busy: "34% CPU" below that, "1.4 cores" above.
+function cpuText(percentOfCore) {
+    var n = Number(percentOfCore);
+    if (!isFinite(n) || n < 0)
+        return "";
+    return n >= 100 ? (n / 100).toFixed(1) + " cores" : Math.round(n) + "% CPU";
+}
+
+function memText(bytes) {
+    var n = Number(bytes);
+    if (!isFinite(n) || n <= 0)
+        return "";
+    return n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : Math.max(1, Math.round(n / 1e6)) + " MB";
+}
+
+// "⚙ 1.4 cores · 2.1 GB" for a running session's processes; "hot" at one core or more.
+function usageChip(session) {
+    var usage = session && session.live ? session.usage : null;
+    if (!usage || !usage.rssBytes)
+        return null;
+    var parts = [cpuText(usage.cpu), memText(usage.rssBytes)].filter(function (x) { return x; });
+    return { kind: usage.cpu >= 100 ? "hot" : "usage", text: "⚙ " + parts.join(" · ") };
+}
+
+// What all running AI sessions use together: {cpu, rssBytes, count}.
+function sessionTotals(results) {
+    var total = { cpu: 0, rssBytes: 0, count: 0 };
+    var list = results && results.sessions ? results.sessions : [];
+    for (var i = 0; i < list.length; i++) {
+        var usage = list[i].live ? list[i].usage : null;
+        if (!usage)
+            continue;
+        total.cpu += Number(usage.cpu) || 0;
+        total.rssBytes += Number(usage.rssBytes) || 0;
+        total.count++;
+    }
+    return total;
+}
+
+// 0..1 for a bar; null-safe.
+function fraction(part, whole) {
+    var a = Number(part), b = Number(whole);
+    return isFinite(a) && isFinite(b) && b > 0 ? Math.max(0, Math.min(1, a / b)) : 0;
 }

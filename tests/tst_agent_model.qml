@@ -69,6 +69,29 @@ TestCase {
         verify(AgentModel.freeSummary({ git: git, branch: "fix/x", sizeBytes: 5e9, live: false }).indexOf("keeps its 1 commit") > 0);
     }
 
+    function test_activity() {
+        compare(AgentModel.cpuText(34.2), "34% CPU");
+        compare(AgentModel.cpuText(140), "1.4 cores");
+        compare(AgentModel.cpuText(-1), "");
+        compare(AgentModel.memText(310000000), "310 MB");
+        compare(AgentModel.memText(2100000000), "2.1 GB");
+        var warm = { live: true, usage: { cpu: 12, rssBytes: 300000000 } };
+        compare(AgentModel.usageChip(warm).text, "⚙ 12% CPU · 300 MB");
+        compare(AgentModel.usageChip(warm).kind, "usage");
+        compare(AgentModel.usageChip({ live: true, usage: { cpu: 250, rssBytes: 1e9 } }).kind, "hot");
+        compare(AgentModel.usageChip({ live: false, usage: { cpu: 5, rssBytes: 1e8 } }), null);
+        var totals = AgentModel.sessionTotals({ sessions: [
+            { live: true, usage: { cpu: 50, rssBytes: 1e8 } },
+            { live: true, usage: { cpu: 70, rssBytes: 2e8 } },
+            { live: false, usage: { cpu: 99, rssBytes: 9e9 } }
+        ] });
+        compare(totals.count, 2);
+        compare(Math.round(totals.cpu), 120);
+        compare(AgentModel.fraction(5, 10), 0.5);
+        compare(AgentModel.fraction(5, 0), 0);
+        compare(AgentModel.fraction(20, 10), 1);
+    }
+
     function test_projectLabel() {
         compare(AgentModel.projectLabel("/h/Work/kboom", { repo: "kboom" }, "/h"), "kboom");
         compare(AgentModel.projectLabel("/h/Work/kboom/.claude/worktrees/linux-edge", { repo: "kboom" }, "/h"), "kboom › linux-edge");

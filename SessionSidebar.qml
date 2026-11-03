@@ -38,14 +38,37 @@ Item {
         model: sidebar.settingsShown ? [] : sidebar.rows
         boundsBehavior: Flickable.StopAtBounds
 
+        // The header grows once the first activity reading arrives; keep the view on it.
+        Connections {
+            target: list.headerItem
+            function onHeightChanged() { if (!list.moving) list.positionViewAtBeginning(); }
+        }
+
+        Component.onCompleted: list.positionViewAtBeginning()
+
         header: Item {
             width: list.width
-            height: Style.space(34)
+            height: Style.space(34) + (activity.visible && sidebar.controller.showActivity ? activity.implicitHeight + Style.spacing.md : 0)
+
+            ActivityPanel {
+                id: activity
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.topMargin: Style.space(34)
+                anchors.leftMargin: Style.spacing.sm
+                anchors.rightMargin: Style.spacing.sm
+                visible: sidebar.controller.showActivity && hasData
+                system: sidebar.controller.agentResults.system || ({})
+                totals: AgentModel.sessionTotals(sidebar.controller.agentResults)
+            }
 
             Text {
                 anchors.left: parent.left
                 anchors.leftMargin: Style.spacing.sm
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.top: parent.top
+                height: Style.space(34)
+                verticalAlignment: Text.AlignVCenter
                 text: sidebar.rows.length ? "AI sessions" : "No AI sessions"
                 textFormat: Text.PlainText
                 color: Commons.Color.menu.text
@@ -61,7 +84,8 @@ Item {
                 height: width
                 radius: Style.cornerRadius
                 anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.top: parent.top
+                anchors.topMargin: Style.space(3)
                 color: sidebar.settingsShown || gearMouse.containsMouse
                     ? Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.16)
                     : "transparent"
@@ -265,7 +289,9 @@ Item {
                                     required property var modelData
                                     readonly property color tone: modelData.kind === "dirty" ? "#F59E0B"
                                         : (modelData.kind === "unmerged" ? "#60A5FA"
-                                        : (modelData.kind === "size" ? "#A8A29E" : "#4ADE80"))
+                                        : (modelData.kind === "size" ? "#A8A29E"
+                                        : (modelData.kind === "usage" ? "#2DD4BF"
+                                        : (modelData.kind === "hot" ? "#F87171" : "#4ADE80"))))
                                     width: chipText.implicitWidth + Style.spacing.md
                                     height: chipText.implicitHeight + Style.spacing.xs
                                     radius: height / 2
@@ -641,6 +667,13 @@ Item {
             hint: "Sessions idle for more than a day."
             checked: sidebar.controller.showOlderSessions
             onToggled: sidebar.controller.setShowOlderSessions(!sidebar.controller.showOlderSessions)
+        }
+
+        SwitchRow {
+            label: "Show activity monitor"
+            hint: "CPU, GPU and memory, and what AI sessions use."
+            checked: sidebar.controller.showActivity
+            onToggled: sidebar.controller.setShowActivity(!sidebar.controller.showActivity)
         }
 
         SwitchRow {
