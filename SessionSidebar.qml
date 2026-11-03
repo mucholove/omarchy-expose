@@ -653,8 +653,8 @@ Item {
         }
 
         SwitchRow {
-            label: "Show Macs"
-            hint: "Your Macs on Tailscale, with Connect and an always-on warning."
+            label: "Show devices"
+            hint: "Computers on Tailscale (Mac, Windows, Linux), with Connect and a gear to configure them."
             checked: sidebar.controller.showMacs
             onToggled: sidebar.controller.setShowMacs(!sidebar.controller.showMacs)
         }

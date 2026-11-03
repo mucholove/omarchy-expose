@@ -11,7 +11,7 @@ macOS-style Exposé for Omarchy: one key or a hot corner shows every open window
 - **Search.** Just start typing to filter windows by title or application.
 - **Workspace scope.** Press Tab to switch between every window and windows on the current workspace, and pick which of the two the overview opens with. Per-monitor mode evaluates the current workspace of the selected display.
 - **Multi-monitor layouts.** Every display blurs and dims, with one grid on the focused display (or the display whose hot corner was used). All displays shows every window there; This display keeps that display's own windows.
-- **Macs.** Your Macs on Tailscale appear as a row of cards with online/sleeping/offline status, an always-on warning, and a Connect button (Remmina, TigerVNC or KRDC; `sudo pacman -S remmina`). Optional `~/.config/omarchy/expose-macs.json`: `{"macs":[{"match":"mini","name":"Mac mini","alwaysOn":true,"user":"gustavo"}]}`. Toggle with `omarchy-shell expose macs on|off`.
+- **Devices.** The Macs, Windows PCs and Linux machines on your Tailscale network appear as a row of cards: online/sleeping/offline status, the MagicDNS name, the Tailscale IP (click either to copy it), whether the connection is direct (with the LAN address) or relayed, an always-on warning for Macs, and a Connect button. A gear in the row header opens the device configuration panel. Toggle the row with `omarchy-shell expose macs on|off` or the "Show devices" switch.
 - **Built for Omarchy.** Runs inside Omarchy Shell, follows the active theme, and adds no packages, services, or daemons.
 - **Hot corner.** Toggle the overview by flinging the pointer into a corner. Uses the outermost display by default, with an option for all displays.
 
@@ -136,6 +136,35 @@ omarchy-shell expose moveCursorToWindow on       # on | off
 ```
 
 After hiding the bottom text, you can restore it while Settings remains open. If you close Settings first, edit `~/.config/omarchy/shell.json` and set `"showFooter": true` in the `expose.window-overview` plugin entry.
+
+## Devices
+
+Discovery uses `tailscale status --json`: peers running macOS (default protocol VNC, port 5900), Windows (RDP, 3389) or Linux (SSH, 22). iOS, Android and this machine are left out. A device shows up in the gear immediately with those defaults; devices Tailscale does not know about can be added by hand.
+
+**Connect.** No users configured: Exposé asks you to add one in the gear (it never guesses a username). One user: it connects straight away. Several users: Connect opens a small chooser, last used first. VNC and RDP write a Remmina profile and run `remmina -c <profile>`; SSH opens a terminal with `ssh -- user@host`. Connecting uses the Tailscale IPv4 unless you set an address override.
+
+Before launching, Exposé checks that Remmina is installed and that its plugin libraries resolve (`ldd` on the VNC and RDP plugins, no shell). If not, it shows the exact fix instead: `sudo pacman -S remmina libvncserver freerdp` (or just the missing package). Remmina's own VNC plugin is used because it supports the Apple Remote Desktop username and password login of macOS Screen Sharing; the gtk-vnc plugin does not.
+
+**Config file.** `~/.config/omarchy/expose-devices.json`, written only by the gear (through `device-config save`). The legacy `~/.config/omarchy/expose-macs.json` is still read as a fallback and never written.
+
+```json
+{"version": 1, "devices": [{
+  "id": "mac-mini", "match": "gustavos-mac-mini", "name": "Mac mini",
+  "address": "", "protocol": "vnc", "port": null,
+  "alwaysOn": true, "hidden": false, "notes": "",
+  "users": [{"name": "gustavo", "label": "Gustavo"}]
+}]}
+```
+
+`match` is a case-insensitive part of the host name. `address` overrides the Tailscale IP (IPv4, IPv6 or host name). `port` null means the protocol default. `alwaysOn` says whether a Mac is expected to stay on. The last user you connected with is remembered per device in `~/.local/state/expose-mucholove/last-user.json`, not in the config.
+
+**Safety.** All reading, validation and writing happens in the `device-config` helper; the QML never touches files.
+- Strict validation on load and save: ids, matches, names, user names (`^[A-Za-z0-9._-]{1,64}$`, not starting with `-`), addresses (IP or host name only), ports 1-65535, protocol vnc/rdp/ssh. Unknown keys are dropped, malformed entries are skipped on load, and a save with any invalid field is rejected as a whole and shown in red in the panel.
+- Atomic writes (temp file in the same directory, then rename), file mode 0600, config directory 0700, one `.bak` of the previous version. A symlinked config path is never followed or written.
+- No passwords: there is no password field, nothing secret is stored, logged or put on a command line, and no `user:pass@` URLs. The Remmina profile keeps `password=` empty, so Remmina prompts and, if you tick "save password", keeps it in its own keyring. Profiles live in `~/.local/share/expose-mucholove/remmina/` (0700, files 0600).
+- SSH is always run with an argument list, never a shell string. The read-only `pmset` check for Macs uses the device's first user, `BatchMode` and strict host-key checking, so an unknown host just reports "unknown".
+
+The Remmina profile keys follow Remmina 1.4 profile files as remembered from its documentation; they were not verified against a live Remmina when this was written.
 
 ## Security and system changes
 
