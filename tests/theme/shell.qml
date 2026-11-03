@@ -54,6 +54,8 @@ ShellRoot {
         function previewRectFor(model, rect) { return rect; }
         function workspaceName(model) { return "1"; }
         function iconFor(model) { return ""; }
+        readonly property string homeDirectory: "/home/test"
+        function agentInfoFor(model) { return ({ agent: "", cwd: "" }); }
     }
     Window {
         id: window

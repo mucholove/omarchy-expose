@@ -80,3 +80,8 @@ function searchTextFor(toplevel) {
     return (appIdFor(toplevel) + " " + String(ipc.class || "") + " "
         + String(ipc.initialClass || "") + " " + String((toplevel && toplevel.title) || "")).toLowerCase();
 }
+
+function pidFor(toplevel) {
+    var pid = Number(ipcFor(toplevel).pid);
+    return isFinite(pid) && pid > 0 ? pid : 0;
+}

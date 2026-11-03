@@ -9,6 +9,7 @@ import qs.Commons as Commons // qmllint disable import
 import qs.Ui as Ui // qmllint disable import
 import "IconResolver.js" as IconResolver
 import "WindowModel.js" as WindowModel
+import "AgentModel.js" as AgentModel
 import "ScreenLayout.js" as ScreenLayout
 
 Item {
@@ -215,6 +216,9 @@ Item {
     readonly property bool motionSettled: root.motionProgress >= 0.999
     property int lastRequestedBlur: -1
     property var iconCache: ({})
+    // {pid: {agent, cwd}} from ./agent-of-windows, refreshed each time Exposé opens.
+    property var agentResults: ({})
+    readonly property string homeDirectory: Quickshell.env("HOME") || ""
     property int modelRevision: 0
     property var sessionToplevels: []
     property var sessionAspectRatios: []
@@ -879,7 +883,25 @@ Item {
         root.setWorkspaceScope(root.workspaceScope === "all" ? "current" : "all");
     }
 
+    function refreshAgents() {
+        var pids = [];
+        for (var i = 0; i < root.allToplevels.length; i++) {
+            var pid = WindowModel.pidFor(root.allToplevels[i]);
+            if (pid && pids.indexOf(String(pid)) === -1)
+                pids.push(String(pid));
+        }
+        if (!pids.length || agentProbe.running)
+            return;
+        agentProbe.command = [root.pluginDir + "/agent-of-windows"].concat(pids);
+        agentProbe.running = true;
+    }
+
+    function agentInfoFor(top) {
+        return AgentModel.infoFor(root.agentResults, WindowModel.pidFor(top));
+    }
+
     function refreshHyprlandState() {
+        root.refreshAgents();
         Hyprland.refreshMonitors();
         Hyprland.refreshWorkspaces();
         Hyprland.refreshToplevels();
@@ -1525,6 +1547,13 @@ Item {
         onTriggered: {
             if (!root.hotCornerHovered())
                 root.hotCornerArmed = true;
+        }
+    }
+
+    Process {
+        id: agentProbe
+        stdout: StdioCollector {
+            onStreamFinished: root.agentResults = AgentModel.parseResult(this.text)
         }
     }
 

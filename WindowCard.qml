@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import Quickshell.Hyprland
 import Quickshell.Wayland
 import "WindowModel.js" as WindowModel
+import "AgentModel.js" as AgentModel
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
@@ -30,10 +31,34 @@ Ui.BorderSurface {
     readonly property bool integratedFooter: card.controller.windowFooterStyle === "integrated"
     readonly property bool overlayFooter: card.controller.windowFooterStyle === "overlay"
     readonly property bool centeredFooter: card.controller.windowFooterStyle === "centered"
-    readonly property string windowTitle: String(modelData.title || WindowModel.appIdFor(modelData) || "Untitled window")
+    readonly property var agentInfo: card.controller.agentInfoFor(modelData)
+    readonly property string agentName: String(card.agentInfo.agent || "")
+    readonly property string agentState: card.agentName ? AgentModel.stateFromTitle(modelData.title) : ""
+    readonly property bool terminalWindow: card.agentName !== "" || AgentModel.isTerminalClass(WindowModel.appIdFor(modelData))
+    readonly property string workingDirectory: card.terminalWindow
+        ? AgentModel.shortPath(card.agentInfo.cwd, card.controller.homeDirectory) : ""
+    readonly property string windowTitle: card.agentName
+        ? AgentModel.cleanTitle(String(modelData.title || "Untitled window"))
+        : String(modelData.title || WindowModel.appIdFor(modelData) || "Untitled window")
+    // Second footer line: "waits for you"/"working" and the directory for agents,
+    // the directory for other terminals, else the application id.
+    readonly property string detailLine: {
+        var parts = [];
+        if (card.agentState === "waiting")
+            parts.push("waits for you");
+        else if (card.agentState === "working")
+            parts.push("working");
+        else if (card.agentName)
+            parts.push(AgentModel.labelFor(card.agentName));
+        if (card.workingDirectory)
+            parts.push(card.workingDirectory);
+        return parts.length ? parts.join("  ·  ") : "";
+    }
     readonly property string applicationName: WindowModel.appIdFor(modelData) || "Application"
     readonly property string workspaceName: card.controller.workspaceName(modelData)
-    readonly property string iconSource: card.controller.iconFor(modelData)
+    readonly property string iconSource: card.agentName
+        ? Qt.resolvedUrl("assets/agents/" + (["claude", "codex"].indexOf(card.agentName) !== -1 ? card.agentName : "agent") + ".svg")
+        : card.controller.iconFor(modelData)
     readonly property var outlineSpec: hovered || selected || focusedWindow
         ? controller.windowBorders.activeSpec : controller.windowBorders.inactiveSpec
     readonly property color currentColor: Style.selectedStateColor(Commons.Color.menu.text, Commons.Color.accent)
@@ -217,6 +242,18 @@ Ui.BorderSurface {
         source: card.iconSource
         fillMode: Image.PreserveAspectFit
         asynchronous: true
+        sourceSize.width: Style.space(iconSize) * 2
+        sourceSize.height: Style.space(iconSize) * 2
+
+        Rectangle {
+            visible: card.agentState === "waiting"
+            width: Style.space(9)
+            height: width
+            radius: width / 2
+            color: "#F5C451"
+            anchors.right: parent.right
+            anchors.top: parent.top
+        }
     }
 
     component WorkspaceColumn: ColumnLayout {
@@ -281,7 +318,7 @@ Ui.BorderSurface {
 
                     CardText {
                         Layout.fillWidth: true
-                        text: card.applicationName
+                        text: card.detailLine || card.applicationName
                         opacity: 0.68
                         font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
@@ -309,7 +346,7 @@ Ui.BorderSurface {
 
                 CardText {
                     Layout.fillWidth: true
-                    text: card.applicationName
+                    text: card.detailLine || card.applicationName
                     opacity: 0.62
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight
@@ -358,7 +395,7 @@ Ui.BorderSurface {
             CardText {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.maximumWidth: Math.max(1, card.width - Style.space(32))
-                text: card.applicationName + "  ·  Workspace " + card.workspaceName
+                text: (card.detailLine || card.applicationName) + "  ·  Workspace " + card.workspaceName
                 color: card.focusedWindow ? card.currentColor : Commons.Color.menu.text
                 opacity: card.focusedWindow ? 1 : 0.62
                 font.pixelSize: Style.font.caption

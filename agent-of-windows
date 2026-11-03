@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Name the coding agent and the working directory inside each window.
+
+Usage: agent-of-windows PID...
+Prints JSON {"<pid>": {"agent": "claude"|"codex"|...|"", "cwd": "/path"}}.
+An agent is a descendant (depth <= 5) of the window's process whose command
+name or script name is a known agent. cwd is the agent's, else the deepest
+descendant's (the shell or foreground program), else the window process's.
+"""
+import json
+import os
+import sys
+
+AGENTS = {"claude", "codex", "opencode", "gemini", "aider", "amp", "cursor-agent"}
+MAX_DEPTH = 5
+
+
+def read_procs():
+    kids, comm = {}, {}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "rb") as f:
+                raw = f.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        rparen = raw.rfind(")")
+        fields = raw[rparen + 2:].split()
+        pid, ppid = int(name), int(fields[1])
+        comm[pid] = raw[raw.find("(") + 1:rparen]
+        kids.setdefault(ppid, []).append(pid)
+    return kids, comm
+
+
+def agent_name(pid, comm):
+    if comm.get(pid) in AGENTS:
+        return comm[pid]
+    if comm.get(pid) in ("node", "bun", "python3", "python", "deno"):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                args = f.read().split(b"\0")[1:3]
+        except OSError:
+            return ""
+        for arg in args:
+            base = os.path.basename(arg.decode("utf-8", "replace"))
+            if base in AGENTS:
+                return base
+    return ""
+
+
+def cwd_of(pid):
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return ""
+
+
+def inspect(root, kids, comm):
+    found, deepest, best = "", root, 0
+    stack = [(root, 0)]
+    while stack:
+        pid, depth = stack.pop()
+        if depth > 0 and not found:
+            name = agent_name(pid, comm)
+            if name:
+                found, deepest = name, pid
+                break
+        if depth > best:
+            best, deepest = depth, pid
+        if depth < MAX_DEPTH:
+            stack.extend((child, depth + 1) for child in kids.get(pid, []))
+    return {"agent": found, "cwd": cwd_of(deepest) or cwd_of(root)}
+
+
+def main():
+    kids, comm = read_procs()
+    out = {}
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            out[arg] = inspect(int(arg), kids, comm)
+    print(json.dumps(out, ensure_ascii=False))
+
+
+main()
