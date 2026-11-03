@@ -300,6 +300,7 @@ Ui.BorderSurface {
 
         CardText {
             Layout.alignment: Qt.AlignRight
+            visible: card.width > Style.space(420)
             text: "Workspace"
             opacity: 0.55
             font.pixelSize: Style.font.caption

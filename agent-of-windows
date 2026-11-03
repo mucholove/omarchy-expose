@@ -2,7 +2,8 @@
 """Name the coding agent and the working directory inside each window.
 
 Usage: agent-of-windows PID...
-Prints JSON {"<pid>": {"agent", "cwd", "branch", "started"}} where branch is the
+Prints JSON {"windows": {"<pid>": {"agent", "cwd", "branch", "started", "agentPid"}},
+"sessions": [...Claude Code sessions...]} where branch is the
 git branch (or short hash) of cwd and started is the epoch second the agent (else
 the window's shell) began.
 An agent is a descendant (depth <= 5) of the window's process whose command
@@ -93,14 +94,14 @@ def started_at(pid):
 
 
 def inspect(root, kids, comm):
-    found, deepest, best = "", root, 0
+    found, deepest, best, agent_pid = "", root, 0, 0
     stack = [(root, 0)]
     while stack:
         pid, depth = stack.pop()
         if depth > 0 and not found:
             name = agent_name(pid, comm)
             if name:
-                found, deepest = name, pid
+                found, deepest, agent_pid = name, pid, pid
                 break
         if depth > best:
             best, deepest = depth, pid
@@ -110,16 +111,115 @@ def inspect(root, kids, comm):
     usable = cwd and not cwd.startswith("/proc/")
     return {"agent": found, "cwd": cwd,
             "branch": git_branch(cwd) if usable else "",
-            "started": started_at(deepest)}
+            "started": started_at(deepest), "agentPid": agent_pid}
+
+
+CLAUDE_DIR = os.path.expanduser("~/.claude")
+TAIL_BYTES = 262144
+
+
+def transcript_path(session_id):
+    base = os.path.join(CLAUDE_DIR, "projects")
+    try:
+        for project in os.listdir(base):
+            path = os.path.join(base, project, session_id + ".jsonl")
+            if os.path.exists(path):
+                return path
+    except OSError:
+        pass
+    return ""
+
+
+def clip(text, limit):
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def transcript_facts(path):
+    """Context tokens, model, last prompt and last reply from the transcript tail."""
+    facts = {"model": "", "context": 0, "prompt": "", "reply": "", "tool": ""}
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - TAIL_BYTES))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return facts
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get("message") or {}
+        kind = entry.get("type")
+        if kind == "assistant" and isinstance(message, dict):
+            usage = message.get("usage") or {}
+            if not facts["context"] and usage:
+                facts["context"] = (usage.get("input_tokens", 0)
+                                    + usage.get("cache_creation_input_tokens", 0)
+                                    + usage.get("cache_read_input_tokens", 0))
+                facts["model"] = str(message.get("model") or "")
+            if not facts["reply"]:
+                reply = text_of(message.get("content")).strip()
+                if reply:
+                    facts["reply"] = clip(reply, 160)
+        elif kind == "user" and isinstance(message, dict) and not facts["prompt"]:
+            if entry.get("isMeta") or entry.get("isSidechain"):
+                continue
+            prompt = text_of(message.get("content")).strip()
+            if prompt and not prompt.startswith(("<", "[Request interrupted")):
+                facts["prompt"] = clip(prompt, 160)
+        if facts["context"] and facts["reply"] and facts["prompt"]:
+            break
+    return facts
+
+
+def sessions(window_agents):
+    out = []
+    folder = os.path.join(CLAUDE_DIR, "sessions")
+    try:
+        names = [n for n in os.listdir(folder) if n.endswith(".json")]
+    except OSError:
+        return out
+    for name in names:
+        try:
+            with open(os.path.join(folder, name)) as f:
+                data = json.load(f)
+            pid = int(data["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not os.path.exists(f"/proc/{pid}"):
+            continue
+        facts = transcript_facts(transcript_path(str(data.get("sessionId", "")))) \
+            if data.get("sessionId") else {}
+        cwd = data.get("cwd", "")
+        out.append({
+            "pid": pid, "id": data.get("sessionId", ""), "name": data.get("name", ""),
+            "kind": data.get("kind", ""), "status": data.get("status", ""),
+            "statusAt": data.get("statusUpdatedAt", 0), "startedAt": data.get("startedAt", 0),
+            "version": data.get("version", ""), "cwd": cwd, "branch": git_branch(cwd),
+            "windowPid": window_agents.get(pid, 0), **facts,
+        })
+    return out
 
 
 def main():
     kids, comm = read_procs()
-    out = {}
+    windows = {}
     for arg in sys.argv[1:]:
         if arg.isdigit():
-            out[arg] = inspect(int(arg), kids, comm)
-    print(json.dumps(out, ensure_ascii=False))
+            windows[arg] = inspect(int(arg), kids, comm)
+    by_agent = {w["agentPid"]: int(k) for k, w in windows.items() if w["agentPid"]}
+    print(json.dumps({"windows": windows, "sessions": sessions(by_agent)}, ensure_ascii=False))
 
 
 main()

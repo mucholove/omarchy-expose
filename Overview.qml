@@ -218,6 +218,10 @@ Item {
     property var iconCache: ({})
     // {pid: {agent, cwd}} from ./agent-of-windows, refreshed each time Exposé opens.
     property var agentResults: ({})
+    // Refreshed with the probe; sidebar ages are relative to it.
+    property real nowMs: Date.now()
+    readonly property var focusedToplevel: Hyprland.activeToplevel
+    readonly property bool sessionSidebarEnabled: !root.pluginEntry || root.pluginEntry.sessionSidebar !== false
     readonly property string homeDirectory: Quickshell.env("HOME") || ""
     property int modelRevision: 0
     property var sessionToplevels: []
@@ -896,6 +900,20 @@ Item {
         agentProbe.running = true;
     }
 
+    function toplevelForPid(pid) {
+        var target = Number(pid);
+        if (!target)
+            return null;
+        for (var i = 0; i < root.allToplevels.length; i++)
+            if (WindowModel.pidFor(root.allToplevels[i]) === target)
+                return root.allToplevels[i];
+        return null;
+    }
+
+    function setSessionSidebar(enabled) {
+        root.updatePluginSetting("sessionSidebar", enabled === true);
+    }
+
     function agentInfoFor(top) {
         return AgentModel.infoFor(root.agentResults, WindowModel.pidFor(top));
     }
@@ -1430,6 +1448,11 @@ Item {
             }
             return;
         }
+        if (event.key === Qt.Key_B && (event.modifiers & Qt.ControlModifier)) {
+            root.setSessionSidebar(!root.sessionSidebarEnabled);
+            event.accepted = true;
+            return;
+        }
         if (event.key === Qt.Key_Escape) {
             if (root.previewIndex >= 0 || root.previewExitIndex >= 0)
                 root.clearPreview();
@@ -1554,6 +1577,14 @@ Item {
         }
     }
 
+    // Keep session states and ages fresh while Exposé is open.
+    Timer {
+        interval: 4000
+        repeat: true
+        running: root.opened
+        onTriggered: root.refreshAgents()
+    }
+
     // Windows can appear after Exposé opens (right after a shell restart, for one).
     Timer {
         id: agentRefreshTimer
@@ -1564,7 +1595,10 @@ Item {
     Process {
         id: agentProbe
         stdout: StdioCollector {
-            onStreamFinished: root.agentResults = AgentModel.parseResult(this.text)
+            onStreamFinished: {
+                root.nowMs = Date.now();
+                root.agentResults = AgentModel.parseResult(this.text);
+            }
         }
     }
 
@@ -1761,6 +1795,12 @@ Item {
         }
         function hotCornerDelay(value: real): string {
             return String(root.setHotCornerDelay(value));
+        }
+        function sessionSidebar(mode: string): string {
+            if (mode !== "on" && mode !== "off")
+                return root.expectedOneOf(["on", "off"]);
+            root.setSessionSidebar(mode === "on");
+            return mode;
         }
         function hotCornerAllDisplays(mode: string): string {
             if (mode !== "on" && mode !== "off")
@@ -2153,58 +2193,72 @@ Item {
                         }
                     }
 
-                    Item {
-                        id: overviewArea
+                    RowLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        readonly property var windowLayout: {
-                            var revision = root.modelRevision;
-                            var screenRatio = overviewWindow.screen && overviewWindow.screen.height > 0
-                                ? overviewWindow.screen.width / overviewWindow.screen.height
-                                : 0;
-                            return root.computeWindowLayout(overviewWindow.screenToplevels, width, height, Style.space(64), Style.spacing.sm, root.windowFooterHeight, screenRatio);
+                        spacing: Style.spacing.md
+
+                        SessionSidebar {
+                            controller: root
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: implicitWidth
+                            visible: overviewWindow.acceptsKeyboard && root.sessionSidebarEnabled
                         }
 
-                        Item {
-                            id: cardLayer
-                            anchors.fill: parent
-                            // The original style grows the whole arrangement out of the
-                            // top-left corner. A single transform does that without
-                            // resizing any card, so no layout, text elision, or layer
-                            // texture is redone per frame.
-                            scale: root.animationStyle === "original" && root.motionTarget > 0
-                                ? root.motionProgress
-                                : 1
-                            transformOrigin: Item.TopLeft
-
-                            Repeater {
-                                model: overviewWindow.cardToplevels
-
-                                delegate: WindowCard {
-                                    controller: root
-                                    screenToplevels: overviewWindow.screenToplevels
-                                    acceptsKeyboard: overviewWindow.acceptsKeyboard
-                                    windowLayout: overviewArea.windowLayout
-                                    layoutAreaWidth: overviewArea.width
-                                    layoutAreaHeight: overviewArea.height
+                            Item {
+                                id: overviewArea
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                readonly property var windowLayout: {
+                                    var revision = root.modelRevision;
+                                    var screenRatio = overviewWindow.screen && overviewWindow.screen.height > 0
+                                        ? overviewWindow.screen.width / overviewWindow.screen.height
+                                        : 0;
+                                    return root.computeWindowLayout(overviewWindow.screenToplevels, width, height, Style.space(64), Style.spacing.sm, root.windowFooterHeight, screenRatio);
                                 }
-                                }
-                        }
 
-                        Text {
-                            anchors.centerIn: parent
-                            visible: overviewWindow.screenToplevels.length === 0
-                            text: root.filterText
-                                ? "No matching windows"
-                                : (root.workspaceScope === "current"
-                                    ? "No windows on Workspace " + overviewWindow.screenWorkspaceLabel
-                                    : "No open windows")
-                            textFormat: Text.PlainText
-                            color: Commons.Color.menu.text
-                            opacity: 0.7
-                            font.family: Style.font.menuFamily
-                            font.pixelSize: Style.font.display
-                        }
+                                Item {
+                                    id: cardLayer
+                                    anchors.fill: parent
+                                    // The original style grows the whole arrangement out of the
+                                    // top-left corner. A single transform does that without
+                                    // resizing any card, so no layout, text elision, or layer
+                                    // texture is redone per frame.
+                                    scale: root.animationStyle === "original" && root.motionTarget > 0
+                                        ? root.motionProgress
+                                        : 1
+                                    transformOrigin: Item.TopLeft
+
+                                    Repeater {
+                                        model: overviewWindow.cardToplevels
+
+                                        delegate: WindowCard {
+                                            controller: root
+                                            screenToplevels: overviewWindow.screenToplevels
+                                            acceptsKeyboard: overviewWindow.acceptsKeyboard
+                                            windowLayout: overviewArea.windowLayout
+                                            layoutAreaWidth: overviewArea.width
+                                            layoutAreaHeight: overviewArea.height
+                                        }
+                                        }
+                                }
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    visible: overviewWindow.screenToplevels.length === 0
+                                    text: root.filterText
+                                        ? "No matching windows"
+                                        : (root.workspaceScope === "current"
+                                            ? "No windows on Workspace " + overviewWindow.screenWorkspaceLabel
+                                            : "No open windows")
+                                    textFormat: Text.PlainText
+                                    color: Commons.Color.menu.text
+                                    opacity: 0.7
+                                    font.family: Style.font.menuFamily
+                                    font.pixelSize: Style.font.display
+                                }
+                            }
+
                     }
 
                     RowLayout {

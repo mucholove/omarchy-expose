@@ -34,7 +34,7 @@ ln -s /usr/share/omarchy/shell/Ui "$lint_dir/qs/Ui"
   --max-warnings 0 \
   --unqualified disable \
   --block-scope-var-declaration disable \
-  Overview.qml WindowCard.qml WindowBorders.qml SettingsView.qml ThemedControl.qml ThemeDivider.qml PluginSettings.qml
+  Overview.qml WindowCard.qml SessionSidebar.qml WindowBorders.qml SettingsView.qml ThemedControl.qml ThemeDivider.qml PluginSettings.qml
 
 # Lint the runtime fixture after injecting its host functions and imports.
 ./tests/check-settings-runtime --lint

@@ -41,12 +41,38 @@ TestCase {
     }
 
     function test_infoAndLabels() {
-        var results = AgentModel.parseResult('{"7":{"agent":"claude","cwd":"/x"}}');
+        var results = AgentModel.parseResult('{"windows":{"7":{"agent":"claude","cwd":"/x"}}}');
         compare(AgentModel.infoFor(results, 7).agent, "claude");
         compare(AgentModel.infoFor(results, 8).agent, "");
         compare(AgentModel.parseResult("not json").x, undefined);
         compare(AgentModel.labelFor("codex"), "Codex");
         verify(AgentModel.isTerminalClass("kitty"));
         verify(!AgentModel.isTerminalClass("chromium"));
+    }
+
+    function test_sessions() {
+        var now = 1000000000;
+        var results = { sessions: [
+            { name: "old", status: "idle", statusAt: now - 3 * 86400000 },
+            { name: "wait", status: "idle", statusAt: now - 600000 },
+            { name: "busy", status: "busy", statusAt: now - 60000 },
+            { name: "wait2", status: "idle", statusAt: now - 60000 }
+        ] };
+        var rows = AgentModel.sessionRows(results, now);
+        compare(rows[0].header, "Working");
+        compare(rows[1].session.name, "busy");
+        compare(rows[2].header, "Waiting for you");
+        compare(rows[3].session.name, "wait2");
+        compare(rows[4].session.name, "wait");
+        compare(rows[5].header, "Older");
+        compare(rows[6].session.name, "old");
+        compare(AgentModel.sessionState({ status: "shell" }), "shell");
+        compare(AgentModel.tokensText(145978), "146k");
+        compare(AgentModel.tokensText(1250000), "1.3M");
+        compare(AgentModel.tokensText(0), "");
+        compare(AgentModel.modelLabel("claude-opus-5-5"), "Opus 5.5");
+        compare(AgentModel.modelLabel("claude-sonnet-5"), "Sonnet 5");
+        compare(AgentModel.ageText(1000000, 1000000 + 7 * 60000), "7m");
+        compare(AgentModel.sessionRows({}, now).length, 0);
     }
 }
