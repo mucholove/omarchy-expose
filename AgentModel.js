@@ -62,7 +62,7 @@ function cleanTitle(title) {
 }
 
 // "/home/me/Work/x" -> "~/Work/x"; deeper paths keep only the last folder.
-function shortPath(path, home) {
+function shortPath(path, home, full) {
     var text = String(path || "");
     if (!text || text.indexOf("/proc/") === 0)
         return "";
@@ -70,7 +70,33 @@ function shortPath(path, home) {
     if (base && (text === base || text.indexOf(base + "/") === 0))
         text = "~" + text.substring(base.length);
     var parts = text.split("/");
-    if (parts.length > 3)
+    if (!full && parts.length > 3)
         text = "…/" + parts[parts.length - 1];
     return text;
+}
+
+// Last folder of a path: "/home/me/Work/kboom" -> "kboom", home -> "~".
+function folderName(path, home) {
+    var text = String(path || "");
+    if (!text || text.indexOf("/proc/") === 0)
+        return "";
+    if (home && text === String(home))
+        return "~";
+    var parts = text.split("/");
+    return parts[parts.length - 1] || "/";
+}
+
+// "3d 4h", "2h 5m", "7m", "just now".
+function durationText(startedSeconds, nowSeconds) {
+    var span = Number(nowSeconds) - Number(startedSeconds);
+    if (!isFinite(span) || Number(startedSeconds) <= 0 || span < 0)
+        return "";
+    var minutes = Math.floor(span / 60);
+    var hours = Math.floor(minutes / 60);
+    var days = Math.floor(hours / 24);
+    if (days > 0)
+        return days + "d " + (hours % 24) + "h";
+    if (hours > 0)
+        return hours + "h " + (minutes % 60) + "m";
+    return minutes > 0 ? minutes + "m" : "just now";
 }

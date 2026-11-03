@@ -23,6 +23,15 @@ Ui.BorderSurface {
     readonly property int slot: card.screenToplevels.indexOf(modelData)
     readonly property bool inLayout: slot >= 0
     property bool hovered: false
+    onHoveredChanged: {
+        if (card.hovered) {
+            card.hoverNow = Date.now() / 1000;
+            hoverDelay.restart();
+        } else {
+            hoverDelay.stop();
+            card.hoverCardShown = false;
+        }
+    }
     readonly property bool selected: card.acceptsKeyboard && inLayout && slot === card.controller.selectedIndex
     readonly property bool focusedWindow: modelData === Hyprland.activeToplevel
     readonly property bool previewed: card.acceptsKeyboard && inLayout && slot === card.controller.previewIndex
@@ -40,20 +49,42 @@ Ui.BorderSurface {
     readonly property string windowTitle: card.agentName
         ? AgentModel.cleanTitle(String(modelData.title || "Untitled window"))
         : String(modelData.title || WindowModel.appIdFor(modelData) || "Untitled window")
-    // Second footer line: "waits for you"/"working" and the directory for agents,
-    // the directory for other terminals, else the application id.
+    // Second footer line: the state (agents only), then folder and git branch.
+    // The logo already says which agent it is; hovering shows the rest.
+    readonly property string folderLine: {
+        var folder = AgentModel.folderName(card.agentInfo.cwd, card.controller.homeDirectory);
+        var branch = String(card.agentInfo.branch || "");
+        return folder ? folder + (branch ? "  ⎇ " + branch : "") : "";
+    }
     readonly property string detailLine: {
         var parts = [];
         if (card.agentState === "waiting")
             parts.push("waits for you");
         else if (card.agentState === "working")
             parts.push("working");
-        else if (card.agentName)
-            parts.push(AgentModel.labelFor(card.agentName));
-        if (card.workingDirectory)
-            parts.push(card.workingDirectory);
-        return parts.length ? parts.join("  ·  ") : "";
+        if (card.terminalWindow && card.folderLine)
+            parts.push(card.folderLine);
+        return parts.join("  ·  ");
     }
+    // Hover details, one "label  value" row each.
+    readonly property var detailRows: {
+        var rows = [];
+        if (card.agentName)
+            rows.push(["Agent", AgentModel.labelFor(card.agentName)
+                + (card.agentState === "waiting" ? " · waits for you" : (card.agentState === "working" ? " · working" : ""))]);
+        if (card.terminalWindow && card.agentInfo.cwd && String(card.agentInfo.cwd).indexOf("/proc/") !== 0)
+            rows.push(["Directory", AgentModel.shortPath(card.agentInfo.cwd, card.controller.homeDirectory, true)]);
+        if (card.agentInfo.branch)
+            rows.push(["Branch", String(card.agentInfo.branch)]);
+        var age = card.terminalWindow ? AgentModel.durationText(card.agentInfo.started, card.hoverNow) : "";
+        if (age)
+            rows.push([card.agentName ? "Running for" : "Open for", age]);
+        rows.push(["Application", card.applicationName]);
+        rows.push(["Workspace", card.workspaceName]);
+        return rows;
+    }
+    property real hoverNow: Date.now() / 1000
+    property bool hoverCardShown: false
     readonly property string applicationName: WindowModel.appIdFor(modelData) || "Application"
     readonly property string workspaceName: card.controller.workspaceName(modelData)
     readonly property string iconSource: card.agentName
@@ -400,6 +431,69 @@ Ui.BorderSurface {
                 opacity: card.focusedWindow ? 1 : 0.62
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
+            }
+        }
+    }
+
+    Timer {
+        id: hoverDelay
+        interval: 450
+        onTriggered: card.hoverCardShown = card.hovered && card.controller.previewIndex < 0
+    }
+
+    // Details on hover, drawn over the bottom of the preview.
+    Rectangle {
+        id: hoverCard
+        visible: card.hoverCardShown && card.inLayout
+        z: 20
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: card.controller.windowFooterHeight + Style.spacing.sm
+        width: Math.min(card.width - Style.spacing.md * 2, Style.space(360))
+        height: hoverRows.implicitHeight + Style.spacing.md * 2
+        radius: Style.cornerRadius
+        color: Commons.Color.menu.background
+        border.width: 1
+        border.color: Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.25)
+
+        ColumnLayout {
+            id: hoverRows
+            anchors.fill: parent
+            anchors.margins: Style.spacing.md
+            spacing: Style.spacing.sm
+
+            CardText {
+                Layout.fillWidth: true
+                text: AgentModel.cleanTitle(String(card.modelData.title || ""))
+                font.bold: true
+                wrapMode: Text.Wrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+            }
+
+            Repeater {
+                model: card.detailRows
+
+                RowLayout {
+                    id: detailRow
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.md
+
+                    CardText {
+                        Layout.preferredWidth: Style.space(92)
+                        text: detailRow.modelData[0]
+                        opacity: 0.55
+                        font.pixelSize: Style.font.caption
+                    }
+
+                    CardText {
+                        Layout.fillWidth: true
+                        text: detailRow.modelData[1]
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideMiddle
+                    }
+                }
             }
         }
     }

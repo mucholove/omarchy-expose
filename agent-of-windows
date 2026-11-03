@@ -2,7 +2,9 @@
 """Name the coding agent and the working directory inside each window.
 
 Usage: agent-of-windows PID...
-Prints JSON {"<pid>": {"agent": "claude"|"codex"|...|"", "cwd": "/path"}}.
+Prints JSON {"<pid>": {"agent", "cwd", "branch", "started"}} where branch is the
+git branch (or short hash) of cwd and started is the epoch second the agent (else
+the window's shell) began.
 An agent is a descendant (depth <= 5) of the window's process whose command
 name or script name is a known agent. cwd is the agent's, else the deepest
 descendant's (the shell or foreground program), else the window process's.
@@ -56,6 +58,40 @@ def cwd_of(pid):
         return ""
 
 
+def git_branch(path):
+    while path and path != "/":
+        git = os.path.join(path, ".git")
+        try:
+            if os.path.isfile(git):
+                with open(git) as f:
+                    line = f.read().strip()
+                if line.startswith("gitdir:"):
+                    gitdir = line[7:].strip()
+                    git = gitdir if os.path.isabs(gitdir) else os.path.join(path, gitdir)
+            if os.path.isdir(git):
+                with open(os.path.join(git, "HEAD")) as f:
+                    head = f.read().strip()
+                if head.startswith("ref: refs/heads/"):
+                    return head[16:]
+                return head[:8]
+        except OSError:
+            return ""
+        path = os.path.dirname(path)
+    return ""
+
+
+def started_at(pid):
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            raw = f.read().decode("utf-8", "replace")
+        ticks = int(raw[raw.rfind(")") + 2:].split()[19])
+        with open("/proc/stat") as f:
+            btime = next(int(l.split()[1]) for l in f if l.startswith("btime"))
+        return btime + ticks // os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, StopIteration):
+        return 0
+
+
 def inspect(root, kids, comm):
     found, deepest, best = "", root, 0
     stack = [(root, 0)]
@@ -70,7 +106,11 @@ def inspect(root, kids, comm):
             best, deepest = depth, pid
         if depth < MAX_DEPTH:
             stack.extend((child, depth + 1) for child in kids.get(pid, []))
-    return {"agent": found, "cwd": cwd_of(deepest) or cwd_of(root)}
+    cwd = cwd_of(deepest) or cwd_of(root)
+    usable = cwd and not cwd.startswith("/proc/")
+    return {"agent": found, "cwd": cwd,
+            "branch": git_branch(cwd) if usable else "",
+            "started": started_at(deepest)}
 
 
 def main():

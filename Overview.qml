@@ -1471,7 +1471,11 @@ Item {
 
     Connections {
         target: Hyprland.toplevels
-        function onValuesChanged() { root.handleToplevelCollectionChanged(); }
+        function onValuesChanged() {
+            root.handleToplevelCollectionChanged();
+            if (root.opened || root.openingPending)
+                agentRefreshTimer.restart();
+        }
     }
 
     Instantiator {
@@ -1548,6 +1552,13 @@ Item {
             if (!root.hotCornerHovered())
                 root.hotCornerArmed = true;
         }
+    }
+
+    // Windows can appear after Exposé opens (right after a shell restart, for one).
+    Timer {
+        id: agentRefreshTimer
+        interval: 300
+        onTriggered: root.refreshAgents()
     }
 
     Process {

@@ -28,6 +28,18 @@ TestCase {
         compare(AgentModel.shortPath("", "/home/me"), "");
     }
 
+    function test_folderAndDuration() {
+        compare(AgentModel.folderName("/home/me/Work/kboom", "/home/me"), "kboom");
+        compare(AgentModel.folderName("/home/me", "/home/me"), "~");
+        compare(AgentModel.folderName("/proc/1/fdinfo", "/home/me"), "");
+        compare(AgentModel.shortPath("/home/me/a/b/c/d", "/home/me", true), "…/d".length ? "~/a/b/c/d" : "");
+        compare(AgentModel.durationText(1000, 1000 + 30), "just now");
+        compare(AgentModel.durationText(1000, 1000 + 7 * 60), "7m");
+        compare(AgentModel.durationText(1000, 1000 + 2 * 3600 + 5 * 60), "2h 5m");
+        compare(AgentModel.durationText(1000, 1000 + 3 * 86400 + 4 * 3600), "3d 4h");
+        compare(AgentModel.durationText(0, 1000), "");
+    }
+
     function test_infoAndLabels() {
         var results = AgentModel.parseResult('{"7":{"agent":"claude","cwd":"/x"}}');
         compare(AgentModel.infoFor(results, 7).agent, "claude");
