@@ -221,6 +221,8 @@ Item {
     // Refreshed with the probe; sidebar ages are relative to it.
     property real nowMs: Date.now()
     readonly property var focusedToplevel: Hyprland.activeToplevel
+    readonly property bool hideAgentWindows: !!root.pluginEntry && root.pluginEntry.hideAgentWindows === true
+    readonly property bool showOlderSessions: !root.pluginEntry || root.pluginEntry.showOlderSessions !== false
     readonly property bool sessionSidebarEnabled: !root.pluginEntry || root.pluginEntry.sessionSidebar !== false
     readonly property string homeDirectory: Quickshell.env("HOME") || ""
     property int modelRevision: 0
@@ -910,6 +912,15 @@ Item {
         return null;
     }
 
+    function setHideAgentWindows(enabled) {
+        root.updatePluginSetting("hideAgentWindows", enabled === true);
+        root.modelRevision++;
+    }
+
+    function setShowOlderSessions(enabled) {
+        root.updatePluginSetting("showOlderSessions", enabled === true);
+    }
+
     function setSessionSidebar(enabled) {
         root.updatePluginSetting("sessionSidebar", enabled === true);
     }
@@ -1138,6 +1149,8 @@ Item {
         for (var index = 0; index < candidates.length; index++) {
             var top = candidates[index];
             if (root.workspaceScope === "current" && !root.isOnWorkspace(top, currentWorkspace))
+                continue;
+            if (root.hideAgentWindows && root.agentInfoFor(top).agent === "claude")
                 continue;
             var haystack = WindowModel.searchTextFor(top);
             if (!needle || haystack.indexOf(needle) !== -1)
@@ -1598,6 +1611,8 @@ Item {
             onStreamFinished: {
                 root.nowMs = Date.now();
                 root.agentResults = AgentModel.parseResult(this.text);
+                if (root.hideAgentWindows)
+                    root.modelRevision++;
             }
         }
     }
@@ -1795,6 +1810,12 @@ Item {
         }
         function hotCornerDelay(value: real): string {
             return String(root.setHotCornerDelay(value));
+        }
+        function hideAgentWindows(mode: string): string {
+            if (mode !== "on" && mode !== "off")
+                return root.expectedOneOf(["on", "off"]);
+            root.setHideAgentWindows(mode === "on");
+            return mode;
         }
         function sessionSidebar(mode: string): string {
             if (mode !== "on" && mode !== "off")

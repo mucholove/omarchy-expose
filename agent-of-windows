@@ -12,6 +12,7 @@ descendant's (the shell or foreground program), else the window process's.
 """
 import json
 import os
+import subprocess
 import sys
 
 AGENTS = {"claude", "codex", "opencode", "gemini", "aider", "amp", "cursor-agent"}
@@ -81,6 +82,42 @@ def git_branch(path):
     return ""
 
 
+_GIT_CACHE = {}
+
+
+def _git(cwd, *args):
+    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                          timeout=3, check=False)
+
+
+def git_state(cwd):
+    """Uncommitted files and commits not yet on the main branch, for cwd's repo.
+
+    {"dirty": N, "ahead": N, "base": "origin/main"}; {} when cwd is not a work tree
+    or no main branch exists. ahead counts commits in HEAD that main lacks.
+    """
+    if not cwd or cwd.startswith("/proc/") or not os.path.isdir(cwd):
+        return {}
+    if cwd in _GIT_CACHE:
+        return _GIT_CACHE[cwd]
+    state = {}
+    try:
+        if _git(cwd, "rev-parse", "--is-inside-work-tree").stdout.strip() == "true":
+            status = _git(cwd, "status", "--porcelain", "-unormal").stdout
+            state["dirty"] = len([l for l in status.splitlines() if l.strip()])
+            for base in ("origin/main", "main", "origin/master", "master"):
+                if _git(cwd, "rev-parse", "--verify", "-q", base).returncode == 0:
+                    count = _git(cwd, "rev-list", "--count", f"{base}..HEAD").stdout.strip()
+                    state.update(ahead=int(count or 0), base=base)
+                    break
+            else:
+                state.update(ahead=0, base="")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        state = {}
+    _GIT_CACHE[cwd] = state
+    return state
+
+
 def started_at(pid):
     try:
         with open(f"/proc/{pid}/stat", "rb") as f:
@@ -111,7 +148,8 @@ def inspect(root, kids, comm):
     usable = cwd and not cwd.startswith("/proc/")
     return {"agent": found, "cwd": cwd,
             "branch": git_branch(cwd) if usable else "",
-            "started": started_at(deepest), "agentPid": agent_pid}
+            "started": started_at(deepest), "agentPid": agent_pid,
+            "git": git_state(cwd) if found else {}}
 
 
 CLAUDE_DIR = os.path.expanduser("~/.claude")
@@ -207,7 +245,7 @@ def sessions(window_agents):
             "kind": data.get("kind", ""), "status": data.get("status", ""),
             "statusAt": data.get("statusUpdatedAt", 0), "startedAt": data.get("startedAt", 0),
             "version": data.get("version", ""), "cwd": cwd, "branch": git_branch(cwd),
-            "windowPid": window_agents.get(pid, 0), **facts,
+            "windowPid": window_agents.get(pid, 0), "git": git_state(cwd), **facts,
         })
     return out
 

@@ -74,5 +74,13 @@ TestCase {
         compare(AgentModel.modelLabel("claude-sonnet-5"), "Sonnet 5");
         compare(AgentModel.ageText(1000000, 1000000 + 7 * 60000), "7m");
         compare(AgentModel.sessionRows({}, now).length, 0);
+        compare(AgentModel.sessionRows(results, now, false).length, 5);
+        compare(AgentModel.gitChips({}).length, 0);
+        compare(AgentModel.gitChips({ dirty: 0, ahead: 0, base: "origin/main" })[0].text, "✓ all on main");
+        var both = AgentModel.gitChips({ dirty: 2, ahead: 3, base: "origin/main" });
+        compare(both.length, 2);
+        compare(both[0].kind, "dirty");
+        compare(both[1].text, "↑ 3 not on main");
+        compare(AgentModel.gitChips({ dirty: 0, ahead: 0, base: "" }).length, 0);
     }
 }

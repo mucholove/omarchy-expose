@@ -10,7 +10,9 @@ Item {
     id: sidebar
 
     required property var controller
-    readonly property var rows: AgentModel.sessionRows(sidebar.controller.agentResults, sidebar.controller.nowMs)
+    property bool settingsShown: false
+    readonly property var rows: AgentModel.sessionRows(sidebar.controller.agentResults, sidebar.controller.nowMs,
+        sidebar.controller.showOlderSessions)
 
     implicitWidth: Style.space(290)
 
@@ -28,21 +30,53 @@ Item {
         anchors.margins: Style.spacing.sm
         clip: true
         spacing: Style.spacing.xs
-        model: sidebar.rows
+        model: sidebar.settingsShown ? [] : sidebar.rows
         boundsBehavior: Flickable.StopAtBounds
 
-        header: Text {
+        header: Item {
             width: list.width
-            height: Style.space(30)
-            text: sidebar.rows.length ? "Claude Code" : "No Claude Code sessions"
-            textFormat: Text.PlainText
-            color: Commons.Color.menu.text
-            opacity: 0.7
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-            verticalAlignment: Text.AlignVCenter
-            leftPadding: Style.spacing.sm
+            height: Style.space(34)
+
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.spacing.sm
+                anchors.verticalCenter: parent.verticalCenter
+                text: sidebar.rows.length ? "Claude Code" : "No Claude Code sessions"
+                textFormat: Text.PlainText
+                color: Commons.Color.menu.text
+                opacity: 0.7
+                font.family: Style.font.menuFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+            }
+
+            Rectangle {
+                id: gear
+                width: Style.space(28)
+                height: width
+                radius: Style.cornerRadius
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                color: sidebar.settingsShown || gearMouse.containsMouse
+                    ? Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.16)
+                    : "transparent"
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "⚙"
+                    textFormat: Text.PlainText
+                    color: Commons.Color.menu.text
+                    font.pixelSize: Style.font.heading
+                }
+
+                MouseArea {
+                    id: gearMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: sidebar.settingsShown = !sidebar.settingsShown
+                }
+            }
         }
 
         delegate: Item {
@@ -72,6 +106,7 @@ Item {
                     parts.push("background");
                 return parts.join("  ·  ");
             }
+            readonly property var chips: session ? AgentModel.gitChips(session.git) : []
             readonly property string snippet: session ? String(session.prompt || session.reply || "") : ""
 
             width: list.width
@@ -171,6 +206,37 @@ Item {
                             elide: Text.ElideMiddle
                         }
 
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: row.chips.length > 0
+                            spacing: Style.spacing.xs
+
+                            Repeater {
+                                model: row.chips
+
+                                Rectangle {
+                                    id: chip
+                                    required property var modelData
+                                    readonly property color tone: modelData.kind === "dirty" ? "#F59E0B"
+                                        : (modelData.kind === "unmerged" ? "#60A5FA" : "#4ADE80")
+                                    width: chipText.implicitWidth + Style.spacing.md
+                                    height: chipText.implicitHeight + Style.spacing.xs
+                                    radius: height / 2
+                                    color: Qt.rgba(tone.r, tone.g, tone.b, 0.16)
+
+                                    Text {
+                                        id: chipText
+                                        anchors.centerIn: parent
+                                        text: chip.modelData.text
+                                        textFormat: Text.PlainText
+                                        color: chip.tone
+                                        font.family: Style.font.menuFamily
+                                        font.pixelSize: Style.font.caption
+                                    }
+                                }
+                            }
+                        }
+
                         Text {
                             Layout.fillWidth: true
                             visible: row.snippet !== ""
@@ -209,6 +275,120 @@ Item {
                     onClicked: sidebar.controller.activate(row.windowTop)
                 }
             }
+        }
+    }
+
+    // Gear panel: a few switches, and a way into Exposé's own settings.
+    Column {
+        id: panel
+        visible: sidebar.settingsShown
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.topMargin: Style.space(44)
+        anchors.margins: Style.spacing.md
+        spacing: Style.spacing.sm
+
+        component SwitchRow: Rectangle {
+            id: switchRow
+            property string label
+            property string hint
+            property bool checked
+            signal toggled()
+            width: panel.width
+            height: labelColumn.implicitHeight + Style.spacing.md * 2
+            radius: Style.cornerRadius
+            color: switchMouse.containsMouse
+                ? Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.1)
+                : "transparent"
+
+            Column {
+                id: labelColumn
+                anchors.left: parent.left
+                anchors.right: toggle.left
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.spacing.md
+                anchors.rightMargin: Style.spacing.md
+                spacing: 2
+
+                Text {
+                    width: parent.width
+                    text: switchRow.label
+                    textFormat: Text.PlainText
+                    color: Commons.Color.menu.text
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.Wrap
+                }
+
+                Text {
+                    width: parent.width
+                    text: switchRow.hint
+                    textFormat: Text.PlainText
+                    color: Commons.Color.menu.text
+                    opacity: 0.55
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.Wrap
+                }
+            }
+
+            Rectangle {
+                id: toggle
+                anchors.right: parent.right
+                anchors.rightMargin: Style.spacing.md
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(38)
+                height: Style.space(20)
+                radius: height / 2
+                color: switchRow.checked ? Commons.Color.accent
+                    : Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.25)
+
+                Rectangle {
+                    width: parent.height - 4
+                    height: width
+                    radius: width / 2
+                    y: 2
+                    x: switchRow.checked ? parent.width - width - 2 : 2
+                    color: "white"
+                }
+            }
+
+            MouseArea {
+                id: switchMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: switchRow.toggled()
+            }
+        }
+
+        SwitchRow {
+            label: "Hide Claude Code windows"
+            hint: "Keep them out of the grid. The list here still jumps to them."
+            checked: sidebar.controller.hideAgentWindows
+            onToggled: sidebar.controller.setHideAgentWindows(!sidebar.controller.hideAgentWindows)
+        }
+
+        SwitchRow {
+            label: "Show older sessions"
+            hint: "Sessions idle for more than a day."
+            checked: sidebar.controller.showOlderSessions
+            onToggled: sidebar.controller.setShowOlderSessions(!sidebar.controller.showOlderSessions)
+        }
+
+        SwitchRow {
+            label: "Hide this list"
+            hint: "Ctrl+B brings it back."
+            checked: false
+            onToggled: sidebar.controller.setSessionSidebar(false)
+        }
+
+        SwitchRow {
+            label: "Exposé settings…"
+            hint: "Appearance, hot corner, motion."
+            checked: false
+            onToggled: sidebar.controller.openSettings()
         }
     }
 }

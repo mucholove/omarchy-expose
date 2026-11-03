@@ -137,12 +137,14 @@ function sortedSessions(results, nowMs) {
 }
 
 // Flat rows for a list: {header: "Working"} entries between {session: {...}} rows.
-function sessionRows(results, nowMs) {
+function sessionRows(results, nowMs, showOlder) {
     var rows = [];
     var last = -1;
     var list = sortedSessions(results, nowMs);
     for (var i = 0; i < list.length; i++) {
         var group = sessionGroup(list[i], nowMs);
+        if (group === 2 && showOlder === false)
+            continue;
         if (group !== last) {
             rows.push({ header: GROUP_TITLES[group], session: null });
             last = group;
@@ -176,4 +178,20 @@ function modelLabel(model) {
 // Age text for a millisecond timestamp, "" when unknown.
 function ageText(timestampMs, nowMs) {
     return durationText(Number(timestampMs) / 1000, Number(nowMs) / 1000);
+}
+
+// Where a session's work stands in git: "unknown" (not a repo), "dirty"
+// (uncommitted changes), "unmerged" (commits main lacks) or "clean" (all on main).
+// Both flags can hold at once; the chips list every one that applies.
+function gitChips(git) {
+    if (!git || git.dirty === undefined)
+        return [];
+    var chips = [];
+    if (git.dirty > 0)
+        chips.push({ kind: "dirty", text: "✎ " + git.dirty + " uncommitted" });
+    if (git.ahead > 0)
+        chips.push({ kind: "unmerged", text: "↑ " + git.ahead + " not on " + String(git.base || "main").replace(/^origin\//, "") });
+    if (!chips.length && git.base)
+        chips.push({ kind: "clean", text: "✓ all on " + String(git.base).replace(/^origin\//, "") });
+    return chips;
 }
