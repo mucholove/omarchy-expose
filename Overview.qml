@@ -222,6 +222,9 @@ Item {
     property real nowMs: Date.now()
     readonly property var focusedToplevel: Hyprland.activeToplevel
     readonly property bool hideAgentWindows: !!root.pluginEntry && root.pluginEntry.hideAgentWindows === true
+    readonly property bool showEndedSessions: !root.pluginEntry || root.pluginEntry.showEndedSessions !== false
+    readonly property bool showArchivedSessions: !!root.pluginEntry && root.pluginEntry.showArchivedSessions === true
+    property string sessionActionMessage: ""
     readonly property bool showOlderSessions: !root.pluginEntry || root.pluginEntry.showOlderSessions !== false
     readonly property bool sessionSidebarEnabled: !root.pluginEntry || root.pluginEntry.sessionSidebar !== false
     readonly property string homeDirectory: Quickshell.env("HOME") || ""
@@ -910,6 +913,63 @@ Item {
             if (WindowModel.pidFor(root.allToplevels[i]) === target)
                 return root.allToplevels[i];
         return null;
+    }
+
+    function setShowEndedSessions(enabled) {
+        root.updatePluginSetting("showEndedSessions", enabled === true);
+    }
+
+    function setShowArchivedSessions(enabled) {
+        root.updatePluginSetting("showArchivedSessions", enabled === true);
+    }
+
+    // Opens a terminal in the session's folder running `claude --resume <id>`
+    // (`claude attach <id>` for a background session), then closes Exposé.
+    function resumeSession(session) {
+        if (!session || !session.id || !session.cwdExists)
+            return;
+        var command = session.agent === "codex" ? ["codex", "resume", String(session.id)]
+            : (session.kind === "bg" && session.live
+                ? ["claude", "attach", String(session.id)]
+                : ["claude", "--resume", String(session.id)]);
+        Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + session.cwd].concat(command));
+        root.dismiss();
+    }
+
+    function copyText(text) {
+        Quickshell.execDetached(["wl-copy", String(text)]);
+        root.sessionActionMessage = "Copied " + String(text);
+        sessionMessageTimer.restart();
+    }
+
+    function openFolder(path) {
+        if (!path)
+            return;
+        Quickshell.execDetached(["setsid", "uwsm-app", "--", "nautilus", "--new-window", String(path)]);
+        root.dismiss();
+    }
+
+    // Runs `agent-of-windows archive|unarchive|free ...`; the answer is shown in the
+    // sidebar and the lists refresh.
+    function runSessionAction(args) {
+        if (sessionActionProbe.running)
+            return;
+        sessionActionProbe.command = [root.pluginDir + "/agent-of-windows"].concat(args);
+        sessionActionProbe.running = true;
+    }
+
+    function archiveSession(session, freeWorktree) {
+        if (!session || !session.id)
+            return;
+        if (freeWorktree && AgentModel.canFreeWorktree(session))
+            root.runSessionAction(["free", String(session.cwd), String(session.live ? session.pid : 0), String(session.id)]);
+        else
+            root.runSessionAction(["archive", String(session.id)]);
+    }
+
+    function restoreSession(session) {
+        if (session && session.id)
+            root.runSessionAction(["unarchive", String(session.id)]);
     }
 
     function setHideAgentWindows(enabled) {
@@ -1603,6 +1663,24 @@ Item {
         id: agentRefreshTimer
         interval: 300
         onTriggered: root.refreshAgents()
+    }
+
+    Process {
+        id: sessionActionProbe
+        stdout: StdioCollector {
+            onStreamFinished: {
+                var reply = AgentModel.parseResult(this.text);
+                root.sessionActionMessage = String(reply.message || "");
+                sessionMessageTimer.restart();
+                root.refreshAgents();
+            }
+        }
+    }
+
+    Timer {
+        id: sessionMessageTimer
+        interval: 6000
+        onTriggered: root.sessionActionMessage = ""
     }
 
     Process {

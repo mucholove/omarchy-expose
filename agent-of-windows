@@ -13,8 +13,10 @@ descendant's (the shell or foreground program), else the window process's.
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
+import time
 
 AGENTS = {"claude", "codex", "opencode", "gemini", "aider", "amp", "cursor-agent"}
 MAX_DEPTH = 5
@@ -84,6 +86,33 @@ def git_branch(path):
 
 
 _GIT_CACHE = {}
+GIT_CACHE_FILE = os.path.join(os.path.expanduser("~/.local/state/expose-mucholove"), "git-state.json")
+GIT_CACHE_TTL = 30
+_DISK_GIT = None
+
+
+def _disk_git():
+    global _DISK_GIT
+    if _DISK_GIT is None:
+        try:
+            with open(GIT_CACHE_FILE) as f:
+                _DISK_GIT = json.load(f)
+        except (OSError, ValueError):
+            _DISK_GIT = {}
+    return _DISK_GIT
+
+
+def save_git_cache():
+    disk = _disk_git()
+    now = time.time()
+    fresh = {k: v for k, v in disk.items() if now - v.get("at", 0) < 600}
+    try:
+        os.makedirs(os.path.dirname(GIT_CACHE_FILE), exist_ok=True)
+        with open(GIT_CACHE_FILE + ".tmp", "w") as f:
+            json.dump(fresh, f)
+        os.replace(GIT_CACHE_FILE + ".tmp", GIT_CACHE_FILE)
+    except OSError:
+        pass
 
 
 def _git(cwd, *args):
@@ -91,7 +120,7 @@ def _git(cwd, *args):
                           timeout=3, check=False)
 
 
-def git_state(cwd):
+def git_state(cwd, fresh=False):
     """Uncommitted files and commits not yet on the main branch, for cwd's repo.
 
     {"repo": "kboom", "dirty": N, "ahead": N, "base": "origin/main"}; {} when cwd is not a work tree
@@ -99,14 +128,20 @@ def git_state(cwd):
     """
     if not cwd or cwd.startswith("/proc/") or not os.path.isdir(cwd):
         return {}
-    if cwd in _GIT_CACHE:
+    if cwd in _GIT_CACHE and not fresh:
         return _GIT_CACHE[cwd]
+    cached = None if fresh else _disk_git().get(cwd)
+    if cached and time.time() - cached.get("at", 0) < GIT_CACHE_TTL:
+        _GIT_CACHE[cwd] = cached["state"]
+        return cached["state"]
     state = {}
     try:
         if _git(cwd, "rev-parse", "--is-inside-work-tree").stdout.strip() == "true":
             common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+            gitdir = _git(cwd, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip()
             if common:
                 state["repo"] = os.path.basename(os.path.dirname(common.rstrip("/")))
+                state["linked"] = bool(gitdir) and os.path.realpath(gitdir) != os.path.realpath(common)
             status = _git(cwd, "status", "--porcelain", "-unormal").stdout
             state["dirty"] = len([l for l in status.splitlines() if l.strip()])
             for base in ("origin/main", "main", "origin/master", "master"):
@@ -119,6 +154,7 @@ def git_state(cwd):
     except (OSError, ValueError, subprocess.SubprocessError):
         state = {}
     _GIT_CACHE[cwd] = state
+    _disk_git()[cwd] = {"at": time.time(), "state": state}
     return state
 
 
@@ -157,6 +193,57 @@ def inspect(root, kids, comm):
 
 
 CLAUDE_DIR = os.path.expanduser("~/.claude")
+STATE_DIR = os.path.expanduser("~/.local/state/expose-mucholove")
+ARCHIVE_FILE = os.path.join(STATE_DIR, "archived.json")
+SIZE_FILE = os.path.join(STATE_DIR, "worktree-sizes.json")
+SIZE_LOCK = os.path.join(STATE_DIR, "sizes.lock")
+SIZE_MAX_AGE = 6 * 3600
+ENDED_DAYS = 14
+ENDED_LIMIT = 25
+
+
+def read_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(value, f)
+    os.replace(tmp, path)
+
+
+def refresh_sizes(paths):
+    """Detached background job: du each path, store bytes in the cache."""
+    try:
+        if os.path.exists(SIZE_LOCK) and time.time() - os.path.getmtime(SIZE_LOCK) < 900:
+            return
+        os.makedirs(STATE_DIR, exist_ok=True)
+        open(SIZE_LOCK, "w").close()
+        subprocess.Popen([os.path.abspath(sys.argv[0]), "--sizes", *paths], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+def compute_sizes(paths):
+    cache = read_json(SIZE_FILE, {})
+    for path in paths:
+        try:
+            out = subprocess.run(["du", "-sb", "--", path], capture_output=True, text=True, timeout=600).stdout
+            cache[path] = {"bytes": int(out.split()[0]), "at": time.time()}
+            write_json(SIZE_FILE, cache)
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            continue
+    try:
+        os.remove(SIZE_LOCK)
+    except OSError:
+        pass
 TAIL_BYTES = 262144
 
 
@@ -188,7 +275,7 @@ def text_of(content):
 
 def transcript_facts(path):
     """Context tokens, model, last prompt and last reply from the transcript tail."""
-    facts = {"model": "", "context": 0, "prompt": "", "reply": "", "title": "", "recap": ""}
+    facts = {"model": "", "context": 0, "prompt": "", "reply": "", "title": "", "recap": "", "cwd": "", "gitBranch": ""}
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
@@ -203,6 +290,9 @@ def transcript_facts(path):
             continue
         message = entry.get("message") or {}
         kind = entry.get("type")
+        if not facts["cwd"] and entry.get("cwd"):
+            facts["cwd"] = str(entry["cwd"])
+            facts["gitBranch"] = str(entry.get("gitBranch") or "")
         if kind == "system" and entry.get("subtype") == "away_summary" and not facts["recap"]:
             text = str(entry.get("content", ""))
             text = re.sub(r"\s*\(disable recaps in /config\)\s*$", "", text)
@@ -234,7 +324,110 @@ def transcript_facts(path):
     return facts
 
 
-def sessions(window_agents):
+def ended_sessions(live_ids):
+    """Recent transcripts whose session is no longer running, newest first."""
+    base = os.path.join(CLAUDE_DIR, "projects")
+    cutoff = time.time() - ENDED_DAYS * 86400
+    found = []
+    try:
+        for project in os.listdir(base):
+            folder = os.path.join(base, project)
+            if not os.path.isdir(folder):
+                continue
+            for name in os.listdir(folder):
+                if not name.endswith(".jsonl"):
+                    continue
+                path = os.path.join(folder, name)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if mtime >= cutoff and name[:-6] not in live_ids:
+                    found.append((mtime, name[:-6], path))
+    except OSError:
+        return []
+    found.sort(reverse=True)
+    out = []
+    for mtime, sid, path in found[:ENDED_LIMIT]:
+        facts = transcript_facts(path)
+        if not (facts["title"] or facts["prompt"] or facts["reply"]):
+            continue
+        cwd = facts.get("cwd", "")
+        out.append({"agent": "claude", "pid": 0, "id": sid, "name": facts["title"] or sid[:8], "kind": "ended",
+                    "nameSource": "derived", "status": "ended", "statusAt": int(mtime * 1000),
+                    "startedAt": 0, "version": "", "cwd": cwd, "branch": facts.get("gitBranch", ""),
+                    "windowPid": 0, "git": git_state(cwd), "live": False,
+                    "cwdExists": bool(cwd) and os.path.isdir(cwd), **facts})
+    return out
+
+
+CODEX_DB = os.path.expanduser("~/.codex/state_5.sqlite")
+
+
+def codex_last_turn(rollout_path):
+    """"working" while the latest turn is open, else "idle"; plus its last agent message."""
+    state, reply = "idle", ""
+    try:
+        size = os.path.getsize(rollout_path)
+        with open(rollout_path, "rb") as f:
+            f.seek(max(0, size - 131072))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return state, reply
+    for line in reversed(lines):
+        try:
+            payload = json.loads(line).get("payload") or {}
+        except ValueError:
+            continue
+        kind = payload.get("type")
+        if kind == "task_started":
+            return "working", reply
+        if kind in ("task_complete", "turn_aborted"):
+            return "idle", clip(payload.get("last_agent_message") or "", 160)
+    return state, reply
+
+
+def codex_sessions(live_agent_windows, kids, comm):
+    """Interactive Codex threads from ~/.codex/state_5.sqlite, live ones matched by cwd."""
+    if not os.path.exists(CODEX_DB):
+        return []
+    live = {}
+    for pid, name in comm.items():
+        if name == "codex" and os.path.exists(f"/proc/{pid}"):
+            live[pid] = cwd_of(pid)
+    try:
+        db = sqlite3.connect(f"file:{CODEX_DB}?mode=ro", uri=True, timeout=1)
+        rows = db.execute(
+            "select id, name, title, cwd, git_branch, tokens_used, model, updated_at, first_user_message, "
+            "rollout_path from threads where archived = 0 and source in ('cli', 'vscode') "
+            "order by updated_at desc limit 60").fetchall()
+        db.close()
+    except sqlite3.Error:
+        return []
+    cutoff = time.time() - ENDED_DAYS * 86400
+    claimed, out = set(), []
+    for tid, name, title, cwd, branch, tokens, model, updated, first, rollout in rows:
+        pid = next((p for p, c in live.items() if c == cwd and p not in claimed), 0)
+        if pid:
+            claimed.add(pid)
+        elif updated < cutoff or len(out) >= ENDED_LIMIT + len(live):
+            continue
+        turn, reply = codex_last_turn(rollout) if rollout else ("idle", "")
+        label = name if name and name != "None" else clip(title or first or tid[:8], 80)
+        out.append({
+            "pid": pid, "id": tid, "agent": "codex", "name": label, "title": label, "nameSource": "auto",
+            "kind": "interactive" if pid else "ended", "live": bool(pid), "cwd": cwd or "",
+            "cwdExists": bool(cwd) and os.path.isdir(cwd), "branch": branch or "", "model": model or "",
+            "status": ("busy" if turn == "working" else "idle") if pid else "ended",
+            "statusAt": int(updated * 1000), "startedAt": 0, "version": "", "context": 0,
+            "tokens": int(tokens or 0), "prompt": clip(first or "", 160), "reply": reply, "recap": "",
+            "windowPid": live_agent_windows.get(pid, 0) if pid else 0,
+            "git": git_state(cwd or ""),
+        })
+    return out
+
+
+def sessions(window_agents, kids, comm):
     out = []
     folder = os.path.join(CLAUDE_DIR, "sessions")
     try:
@@ -253,24 +446,99 @@ def sessions(window_agents):
         facts = transcript_facts(transcript_path(str(data.get("sessionId", "")))) \
             if data.get("sessionId") else {}
         cwd = data.get("cwd", "")
-        out.append({
+        facts = {k: v for k, v in facts.items() if k not in ("cwd", "gitBranch")}
+        out.append({"agent": "claude", "live": True, "cwdExists": os.path.isdir(cwd), 
             "pid": pid, "id": data.get("sessionId", ""), "name": data.get("name", ""),
             "kind": data.get("kind", ""), "nameSource": data.get("nameSource", ""), "status": data.get("status", ""),
             "statusAt": data.get("statusUpdatedAt", 0), "startedAt": data.get("startedAt", 0),
             "version": data.get("version", ""), "cwd": cwd, "branch": git_branch(cwd),
             "windowPid": window_agents.get(pid, 0), "git": git_state(cwd), **facts,
         })
+    out.extend(codex_sessions(window_agents, kids, comm))
+    live_ids = {item["id"] for item in out}
+    live_here = {}
+    for item in out:
+        live_here[item["cwd"]] = live_here.get(item["cwd"], 0) + 1
+    out.extend(ended_sessions(live_ids))
+    for item in out:
+        item["liveHere"] = live_here.get(item["cwd"], 0)
+    archived = set(read_json(ARCHIVE_FILE, []))
+    sizes = read_json(SIZE_FILE, {})
+    stale = []
+    for item in out:
+        item["archived"] = item["id"] in archived
+        if item["git"].get("linked") and item["cwd"]:
+            entry = sizes.get(item["cwd"])
+            item["sizeBytes"] = entry["bytes"] if entry else 0
+            if not entry or time.time() - entry["at"] > SIZE_MAX_AGE:
+                if os.path.isdir(item["cwd"]) and item["cwd"] not in stale:
+                    stale.append(item["cwd"])
+    if stale:
+        refresh_sizes(stale)
     return out
 
 
+def result(ok, message, **extra):
+    print(json.dumps({"ok": ok, "message": message, **extra}, ensure_ascii=False))
+
+
+def set_archived(session_id, archived):
+    ids = [i for i in read_json(ARCHIVE_FILE, []) if i != session_id]
+    if archived:
+        ids.append(session_id)
+    write_json(ARCHIVE_FILE, ids)
+
+
+def free_worktree(path, pid, session_id=""):
+    """git worktree remove (never --force) after checks; ends an idle Claude Code there."""
+    if not os.path.isdir(path):
+        return result(False, "That folder is already gone.")
+    state = git_state(path, fresh=True)
+    if not state.get("linked"):
+        return result(False, "Only linked worktrees can be freed, not a main checkout.")
+    if state.get("dirty", 1) != 0:
+        return result(False, "It has uncommitted changes. Commit or discard them first.")
+    size = (read_json(SIZE_FILE, {}).get(path) or {}).get("bytes", 0)
+    if pid:
+        try:
+            if os.path.realpath(os.readlink(f"/proc/{pid}/cwd")).startswith(os.path.realpath(path)):
+                os.kill(pid, 15)
+                time.sleep(1.0)
+        except OSError:
+            pass
+    run = subprocess.run(["git", "-C", path, "worktree", "remove", path], capture_output=True, text=True)
+    if run.returncode != 0:
+        return result(False, (run.stderr.strip().splitlines() or ["git could not remove it."])[-1])
+    if session_id:
+        set_archived(session_id, True)
+    cache = read_json(SIZE_FILE, {})
+    if cache.pop(path, None) is not None:
+        write_json(SIZE_FILE, cache)
+    gigabytes = f" Freed {size / 1e9:.1f} GB." if size else ""
+    return result(True, "Worktree removed and session archived. Its branch and commits are kept." + gigabytes,
+                  freedBytes=size)
+
+
 def main():
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--sizes":
+        return compute_sizes(argv[1:])
+    if argv and argv[0] == "archive":
+        return (set_archived(argv[1], True), result(True, "Archived."))[1]
+    if argv and argv[0] == "unarchive":
+        return (set_archived(argv[1], False), result(True, "Restored."))[1]
+    if argv and argv[0] == "free":
+        return free_worktree(argv[1], int(argv[2]) if len(argv) > 2 and argv[2].isdigit() else 0,
+                             argv[3] if len(argv) > 3 else "")
     kids, comm = read_procs()
     windows = {}
     for arg in sys.argv[1:]:
         if arg.isdigit():
             windows[arg] = inspect(int(arg), kids, comm)
     by_agent = {w["agentPid"]: int(k) for k, w in windows.items() if w["agentPid"]}
-    print(json.dumps({"windows": windows, "sessions": sessions(by_agent)}, ensure_ascii=False))
+    found = sessions(by_agent, kids, comm)
+    save_git_cache()
+    print(json.dumps({"windows": windows, "sessions": found}, ensure_ascii=False))
 
 
 main()

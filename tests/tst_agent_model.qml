@@ -50,6 +50,25 @@ TestCase {
         compare(AgentModel.sessionGoal({ name: "x", nameSource: "derived", title: "T", recap: "Goal: ship it. Next: test." }), "ship it. Next: test.");
     }
 
+    function test_worktreeFreeing() {
+        var git = { linked: true, dirty: 0, ahead: 1, base: "origin/main" };
+        verify(AgentModel.canFreeWorktree({ live: false, git: git, cwdExists: true, liveHere: 0, status: "ended" }));
+        verify(!AgentModel.canFreeWorktree({ live: false, git: git, cwdExists: true, liveHere: 1, status: "ended" }));
+        verify(AgentModel.canFreeWorktree({ live: true, git: git, cwdExists: true, liveHere: 1, status: "idle" }));
+        verify(!AgentModel.canFreeWorktree({ live: true, git: git, cwdExists: true, liveHere: 1, status: "busy" }));
+        verify(!AgentModel.canFreeWorktree({ live: true, git: git, cwdExists: true, liveHere: 2, status: "idle" }));
+        verify(!AgentModel.canFreeWorktree({ live: false, git: { linked: true, dirty: 2 }, cwdExists: true, liveHere: 0 }));
+        verify(!AgentModel.canFreeWorktree({ live: false, git: { linked: false, dirty: 0 }, cwdExists: true, liveHere: 0 }));
+        verify(!AgentModel.canFreeWorktree({ live: false, git: git, cwdExists: false, liveHere: 0 }));
+        compare(AgentModel.bytesText(6442160356), "6.4 GB");
+        compare(AgentModel.bytesText(11000000000), "11 GB");
+        compare(AgentModel.bytesText(820000000), "820 MB");
+        compare(AgentModel.bytesText(0), "");
+        compare(AgentModel.sessionChips({ git: git, sizeBytes: 5e9, cwdExists: true })[0].kind, "unmerged");
+        compare(AgentModel.sessionChips({ git: git, sizeBytes: 5e9, cwdExists: true }).slice(-1)[0].text, "▤ 5.0 GB worktree");
+        verify(AgentModel.freeSummary({ git: git, branch: "fix/x", sizeBytes: 5e9, live: false }).indexOf("keeps its 1 commit") > 0);
+    }
+
     function test_projectLabel() {
         compare(AgentModel.projectLabel("/h/Work/kboom", { repo: "kboom" }, "/h"), "kboom");
         compare(AgentModel.projectLabel("/h/Work/kboom/.claude/worktrees/linux-edge", { repo: "kboom" }, "/h"), "kboom › linux-edge");
@@ -92,7 +111,15 @@ TestCase {
         compare(AgentModel.modelLabel("claude-sonnet-5"), "Sonnet 5");
         compare(AgentModel.ageText(1000000, 1000000 + 7 * 60000), "7m");
         compare(AgentModel.sessionRows({}, now).length, 0);
-        compare(AgentModel.sessionRows(results, now, false).length, 5);
+        compare(AgentModel.sessionRows(results, now, { showOlder: false }).length, 5);
+        var withEnded = { sessions: results.sessions.concat([
+            { name: "gone", status: "ended", statusAt: now - 5 * 86400000 },
+            { name: "arch", status: "idle", statusAt: now - 1000, archived: true }
+        ]) };
+        compare(AgentModel.sessionRows(withEnded, now).length, 9);
+        compare(AgentModel.sessionRows(withEnded, now, { showEnded: false }).length, 7);
+        var shown = AgentModel.sessionRows(withEnded, now, { showArchived: true });
+        compare(shown[shown.length - 2].header, "Archived");
         compare(AgentModel.gitChips({}).length, 0);
         compare(AgentModel.gitChips({ dirty: 0, ahead: 0, base: "origin/main" })[0].text, "✓ all on main");
         var both = AgentModel.gitChips({ dirty: 2, ahead: 3, base: "origin/main" });

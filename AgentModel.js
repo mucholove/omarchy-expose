@@ -111,24 +111,28 @@ function sessionState(session) {
         return "working";
     if (status === "shell")
         return "shell";
+    if (status === "ended")
+        return "ended";
     return "waiting";
 }
 
 // Group heading for the sidebar: working, waiting (touched in the last day), older.
 function sessionGroup(session, nowMs) {
     var state = sessionState(session);
+    if (state === "ended")
+        return 3;
     if (state === "working" || state === "shell")
         return 0;
     var at = Number(session.statusAt) || 0;
     return nowMs - at < 86400000 ? 1 : 2;
 }
 
-var GROUP_TITLES = ["Working", "Waiting for you", "Older"];
+var GROUP_TITLES = ["Working", "Waiting for you", "Older", "Not running", "Archived"];
 
 function sortedSessions(results, nowMs) {
     var list = results && results.sessions ? results.sessions.slice() : [];
     list.sort(function (a, b) {
-        var ga = sessionGroup(a, nowMs), gb = sessionGroup(b, nowMs);
+        var ga = a.archived ? 4 : sessionGroup(a, nowMs), gb = b.archived ? 4 : sessionGroup(b, nowMs);
         if (ga !== gb)
             return ga - gb;
         return (Number(b.statusAt) || 0) - (Number(a.statusAt) || 0);
@@ -137,13 +141,22 @@ function sortedSessions(results, nowMs) {
 }
 
 // Flat rows for a list: {header: "Working"} entries between {session: {...}} rows.
-function sessionRows(results, nowMs, showOlder) {
+// options: {showOlder, showEnded, showArchived}, each on unless set to false
+// (showArchived is off unless true). Archived sessions sort into their own group.
+function sessionRows(results, nowMs, options) {
+    var showOlder = options === false ? false : !(options && options.showOlder === false);
+    var showEnded = !(options && typeof options === "object" && options.showEnded === false);
+    var showArchived = !!(options && typeof options === "object" && options.showArchived === true);
     var rows = [];
     var last = -1;
     var list = sortedSessions(results, nowMs);
     for (var i = 0; i < list.length; i++) {
         var group = sessionGroup(list[i], nowMs);
-        if (group === 2 && showOlder === false)
+        if (list[i].archived && !showArchived)
+            continue;
+        if (list[i].archived)
+            group = 4;
+        if ((group === 2 && !showOlder) || (group === 3 && !showEnded))
             continue;
         if (group !== last) {
             rows.push({ header: GROUP_TITLES[group], session: null });
@@ -225,4 +238,53 @@ function projectLabel(cwd, git, home) {
     if (!folder)
         return repo;
     return repo && repo !== folder ? repo + " › " + folder : folder;
+}
+
+// "6.4 GB", "820 MB".
+function bytesText(bytes) {
+    var n = Number(bytes);
+    if (!isFinite(n) || n <= 0)
+        return "";
+    if (n >= 1e9)
+        return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + " GB";
+    return Math.max(1, Math.round(n / 1e6)) + " MB";
+}
+
+// Chips under a session: git state, plus the worktree's disk use.
+function sessionChips(session) {
+    if (!session)
+        return [];
+    var chips = gitChips(session.git);
+    var size = bytesText(session.sizeBytes);
+    if (size && session.git && session.git.linked && session.cwdExists !== false)
+        chips.push({ kind: "size", text: "▤ " + size + " worktree" });
+    return chips;
+}
+
+// Can the session's worktree be freed right now? Needs a linked worktree with no
+// uncommitted changes, and nothing else running in it; a live session may only be
+// idle (freeing ends it).
+function canFreeWorktree(session) {
+    if (!session || !session.git || !session.git.linked || session.git.dirty !== 0 || !session.cwdExists)
+        return false;
+    if (session.live)
+        return session.liveHere === 1 && sessionState(session) === "waiting";
+    return !session.liveHere;
+}
+
+function freeSummary(session) {
+    if (!session || !session.git)
+        return "";
+    var parts = ["Removes the worktree folder"];
+    var size = bytesText(session.sizeBytes);
+    if (size)
+        parts[0] += " (" + size + ")";
+    var branch = String(session.branch || "");
+    var ahead = Number(session.git.ahead) || 0;
+    parts.push(ahead > 0
+        ? "Branch " + branch + " keeps its " + ahead + (ahead === 1 ? " commit" : " commits")
+        : "Branch " + branch + " is kept");
+    if (session.live)
+        parts.push("ends this idle session");
+    return parts.join(". ") + ".";
 }
