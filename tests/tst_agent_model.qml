@@ -40,6 +40,15 @@ TestCase {
         compare(AgentModel.durationText(0, 1000), "");
     }
 
+    function test_sessionTitle() {
+        compare(AgentModel.sessionTitle({ name: "kboom-41", nameSource: "derived", title: "Fix follower" }), "Fix follower");
+        compare(AgentModel.sessionTitle({ name: "kboom-41", nameSource: "derived", title: "" }), "kboom-41");
+        compare(AgentModel.sessionTitle({ name: "My name", nameSource: "user", title: "Fix follower" }), "My name");
+        compare(AgentModel.sessionGoal({ name: "My name", nameSource: "user", title: "Fix follower" }), "Fix follower");
+        compare(AgentModel.sessionGoal({ name: "x", nameSource: "derived", title: "Fix follower" }), "");
+        compare(AgentModel.sessionTitle(null), "");
+    }
+
     function test_infoAndLabels() {
         var results = AgentModel.parseResult('{"windows":{"7":{"agent":"claude","cwd":"/x"}}}');
         compare(AgentModel.infoFor(results, 7).agent, "claude");

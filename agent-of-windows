@@ -184,7 +184,7 @@ def text_of(content):
 
 def transcript_facts(path):
     """Context tokens, model, last prompt and last reply from the transcript tail."""
-    facts = {"model": "", "context": 0, "prompt": "", "reply": "", "tool": ""}
+    facts = {"model": "", "context": 0, "prompt": "", "reply": "", "title": ""}
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
@@ -199,6 +199,9 @@ def transcript_facts(path):
             continue
         message = entry.get("message") or {}
         kind = entry.get("type")
+        if kind == "ai-title" and not facts["title"]:
+            facts["title"] = clip(entry.get("aiTitle", ""), 120)
+            continue
         if kind == "assistant" and isinstance(message, dict):
             usage = message.get("usage") or {}
             if not facts["context"] and usage:
@@ -216,7 +219,7 @@ def transcript_facts(path):
             prompt = text_of(message.get("content")).strip()
             if prompt and not prompt.startswith(("<", "[Request interrupted")):
                 facts["prompt"] = clip(prompt, 160)
-        if facts["context"] and facts["reply"] and facts["prompt"]:
+        if facts["context"] and facts["reply"] and facts["prompt"] and facts["title"]:
             break
     return facts
 
@@ -242,7 +245,7 @@ def sessions(window_agents):
         cwd = data.get("cwd", "")
         out.append({
             "pid": pid, "id": data.get("sessionId", ""), "name": data.get("name", ""),
-            "kind": data.get("kind", ""), "status": data.get("status", ""),
+            "kind": data.get("kind", ""), "nameSource": data.get("nameSource", ""), "status": data.get("status", ""),
             "statusAt": data.get("statusUpdatedAt", 0), "startedAt": data.get("startedAt", 0),
             "version": data.get("version", ""), "cwd": cwd, "branch": git_branch(cwd),
             "windowPid": window_agents.get(pid, 0), "git": git_state(cwd), **facts,

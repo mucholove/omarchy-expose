@@ -173,12 +173,26 @@ Item {
 
                         Text {
                             Layout.fillWidth: true
-                            text: row.session ? row.session.name : ""
+                            text: AgentModel.sessionTitle(row.session)
                             textFormat: Text.PlainText
                             color: Commons.Color.menu.text
                             font.family: Style.font.menuFamily
                             font.pixelSize: Style.font.body
                             font.bold: true
+                            wrapMode: Text.Wrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            visible: AgentModel.sessionGoal(row.session) !== ""
+                            text: "Goal: " + AgentModel.sessionGoal(row.session)
+                            textFormat: Text.PlainText
+                            color: Commons.Color.menu.text
+                            opacity: 0.85
+                            font.family: Style.font.menuFamily
+                            font.pixelSize: Style.font.caption
                             wrapMode: Text.Wrap
                             maximumLineCount: 2
                             elide: Text.ElideRight

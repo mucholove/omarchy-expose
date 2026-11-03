@@ -195,3 +195,20 @@ function gitChips(git) {
         chips.push({ kind: "clean", text: "✓ all on " + String(git.base).replace(/^origin\//, "") });
     return chips;
 }
+
+// What a session is about: its own name when the person or Claude gave it one,
+// else Claude Code's generated title, else the derived name.
+function sessionTitle(session) {
+    if (!session)
+        return "";
+    var title = String(session.title || "");
+    if (String(session.nameSource || "") === "derived" && title)
+        return title;
+    return String(session.name || title || "");
+}
+
+// The generated title when it adds something to the shown one, else "".
+function sessionGoal(session) {
+    var title = String(session && session.title || "");
+    return title && title !== sessionTitle(session) ? title : "";
+}
