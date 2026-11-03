@@ -89,9 +89,11 @@ Item {
             readonly property string age: session ? AgentModel.ageText(session.statusAt, sidebar.controller.nowMs) : ""
             readonly property string stateText: phase === "working" ? "working " + age
                 : (phase === "shell" ? "running a command " + age : "waits for you " + age)
-            readonly property string branch: session && session.branch ? "  ⎇ " + session.branch : ""
+            // "worktree-<folder>" repeats the folder, so only other branch names show.
+            readonly property string branch: session && session.branch
+                && session.branch !== "worktree-" + AgentModel.folderName(session.cwd, "") ? "  ⎇ " + session.branch : ""
             readonly property string folder: session
-                ? AgentModel.folderName(session.cwd, sidebar.controller.homeDirectory) : ""
+                ? AgentModel.projectLabel(session.cwd, session.git, sidebar.controller.homeDirectory) : ""
             readonly property string facts: {
                 if (!session)
                     return "";
@@ -188,13 +190,14 @@ Item {
                             Layout.fillWidth: true
                             visible: AgentModel.sessionGoal(row.session) !== ""
                             text: "Goal: " + AgentModel.sessionGoal(row.session)
+                            font.bold: false
                             textFormat: Text.PlainText
                             color: Commons.Color.menu.text
                             opacity: 0.85
                             font.family: Style.font.menuFamily
                             font.pixelSize: Style.font.caption
                             wrapMode: Text.Wrap
-                            maximumLineCount: 2
+                            maximumLineCount: 4
                             elide: Text.ElideRight
                         }
 
@@ -209,15 +212,33 @@ Item {
                             elide: Text.ElideRight
                         }
 
-                        Text {
+                        RowLayout {
                             Layout.fillWidth: true
-                            text: row.folder + row.branch
-                            textFormat: Text.PlainText
-                            color: Commons.Color.menu.text
-                            opacity: 0.62
-                            font.family: Style.font.menuFamily
-                            font.pixelSize: Style.font.caption
-                            elide: Text.ElideMiddle
+                            spacing: Style.spacing.sm
+                            visible: row.folder !== ""
+
+                            Text {
+                                Layout.maximumWidth: parent.width * 0.7
+                                text: "▸ " + row.folder
+                                textFormat: Text.PlainText
+                                color: Commons.Color.accent
+                                font.family: Style.font.menuFamily
+                                font.pixelSize: Style.font.body
+                                font.bold: true
+                                elide: Text.ElideMiddle
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                visible: row.branch !== ""
+                                text: row.branch.trim()
+                                textFormat: Text.PlainText
+                                color: Commons.Color.menu.text
+                                opacity: 0.7
+                                font.family: Style.font.menuFamily
+                                font.pixelSize: Style.font.caption
+                                elide: Text.ElideMiddle
+                            }
                         }
 
                         Flow {

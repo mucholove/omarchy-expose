@@ -47,6 +47,15 @@ TestCase {
         compare(AgentModel.sessionGoal({ name: "My name", nameSource: "user", title: "Fix follower" }), "Fix follower");
         compare(AgentModel.sessionGoal({ name: "x", nameSource: "derived", title: "Fix follower" }), "");
         compare(AgentModel.sessionTitle(null), "");
+        compare(AgentModel.sessionGoal({ name: "x", nameSource: "derived", title: "T", recap: "Goal: ship it. Next: test." }), "ship it. Next: test.");
+    }
+
+    function test_projectLabel() {
+        compare(AgentModel.projectLabel("/h/Work/kboom", { repo: "kboom" }, "/h"), "kboom");
+        compare(AgentModel.projectLabel("/h/Work/kboom/.claude/worktrees/linux-edge", { repo: "kboom" }, "/h"), "kboom › linux-edge");
+        compare(AgentModel.projectLabel("/h/notes", {}, "/h"), "notes");
+        compare(AgentModel.projectLabel("/h", {}, "/h"), "~");
+        compare(AgentModel.projectLabel("", { repo: "kboom" }, "/h"), "kboom");
     }
 
     function test_infoAndLabels() {

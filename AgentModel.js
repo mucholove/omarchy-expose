@@ -207,8 +207,22 @@ function sessionTitle(session) {
     return String(session.name || title || "");
 }
 
-// The generated title when it adds something to the shown one, else "".
+// Claude Code's own recap ("Goal: … Next: …") when it has written one, else the
+// generated title when that adds something to the shown one, else "".
 function sessionGoal(session) {
+    var recap = String(session && session.recap || "");
+    if (recap)
+        return recap.replace(/^Goal:\s*/i, "");
     var title = String(session && session.title || "");
     return title && title !== sessionTitle(session) ? title : "";
+}
+
+// The project a session works in: "kboom" in its main checkout, "kboom › linux-edge"
+// in a worktree or subfolder of another repo, the folder name outside git.
+function projectLabel(cwd, git, home) {
+    var folder = folderName(cwd, home);
+    var repo = git && git.repo ? String(git.repo) : "";
+    if (!folder)
+        return repo;
+    return repo && repo !== folder ? repo + " › " + folder : folder;
 }

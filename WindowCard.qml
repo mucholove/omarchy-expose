@@ -52,7 +52,7 @@ Ui.BorderSurface {
     // Second footer line: the state (agents only), then folder and git branch.
     // The logo already says which agent it is; hovering shows the rest.
     readonly property string folderLine: {
-        var folder = AgentModel.folderName(card.agentInfo.cwd, card.controller.homeDirectory);
+        var folder = AgentModel.projectLabel(card.agentInfo.cwd, card.agentInfo.git, card.controller.homeDirectory);
         var branch = String(card.agentInfo.branch || "");
         return folder ? folder + (branch ? "  ⎇ " + branch : "") : "";
     }

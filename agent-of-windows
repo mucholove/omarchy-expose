@@ -12,6 +12,7 @@ descendant's (the shell or foreground program), else the window process's.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -93,7 +94,7 @@ def _git(cwd, *args):
 def git_state(cwd):
     """Uncommitted files and commits not yet on the main branch, for cwd's repo.
 
-    {"dirty": N, "ahead": N, "base": "origin/main"}; {} when cwd is not a work tree
+    {"repo": "kboom", "dirty": N, "ahead": N, "base": "origin/main"}; {} when cwd is not a work tree
     or no main branch exists. ahead counts commits in HEAD that main lacks.
     """
     if not cwd or cwd.startswith("/proc/") or not os.path.isdir(cwd):
@@ -103,6 +104,9 @@ def git_state(cwd):
     state = {}
     try:
         if _git(cwd, "rev-parse", "--is-inside-work-tree").stdout.strip() == "true":
+            common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+            if common:
+                state["repo"] = os.path.basename(os.path.dirname(common.rstrip("/")))
             status = _git(cwd, "status", "--porcelain", "-unormal").stdout
             state["dirty"] = len([l for l in status.splitlines() if l.strip()])
             for base in ("origin/main", "main", "origin/master", "master"):
@@ -184,7 +188,7 @@ def text_of(content):
 
 def transcript_facts(path):
     """Context tokens, model, last prompt and last reply from the transcript tail."""
-    facts = {"model": "", "context": 0, "prompt": "", "reply": "", "title": ""}
+    facts = {"model": "", "context": 0, "prompt": "", "reply": "", "title": "", "recap": ""}
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
@@ -199,6 +203,12 @@ def transcript_facts(path):
             continue
         message = entry.get("message") or {}
         kind = entry.get("type")
+        if kind == "system" and entry.get("subtype") == "away_summary" and not facts["recap"]:
+            text = str(entry.get("content", ""))
+            text = re.sub(r"\s*\(disable recaps in /config\)\s*$", "", text)
+            text = re.sub(r"^\s*recap:\s*", "", text, flags=re.I)
+            facts["recap"] = clip(text, 260)
+            continue
         if kind == "ai-title" and not facts["title"]:
             facts["title"] = clip(entry.get("aiTitle", ""), 120)
             continue
@@ -219,7 +229,7 @@ def transcript_facts(path):
             prompt = text_of(message.get("content")).strip()
             if prompt and not prompt.startswith(("<", "[Request interrupted")):
                 facts["prompt"] = clip(prompt, 160)
-        if facts["context"] and facts["reply"] and facts["prompt"] and facts["title"]:
+        if facts["context"] and facts["reply"] and facts["prompt"] and facts["title"] and facts["recap"]:
             break
     return facts
 
