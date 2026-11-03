@@ -11,6 +11,7 @@ import "IconResolver.js" as IconResolver
 import "WindowModel.js" as WindowModel
 import "AgentModel.js" as AgentModel
 import "MacModel.js" as MacModel
+import "DeviceModel.js" as DeviceModel
 import "ScreenLayout.js" as ScreenLayout
 
 Item {
@@ -245,6 +246,9 @@ Item {
     property real macNowMs: Date.now()
     property string macMessage: ""
     property var pendingMac: null
+    property string pendingUser: ""
+    property bool devicesOpen: false
+    property bool macLoaded: false
     readonly property bool sessionSidebarEnabled: !root.pluginEntry || root.pluginEntry.sessionSidebar !== false
     readonly property string homeDirectory: Quickshell.env("HOME") || ""
     property int modelRevision: 0
@@ -331,6 +335,7 @@ Item {
         if (!blurRestoreInFlight)
             root.backgroundBlurReleasePhase = 0;
         root.closeSettings();
+        root.devicesOpen = false;
         root.filterText = "";
         root.workspaceScope = root.initialWorkspaceScope;
         root.dismissNotifyShell = false;
@@ -375,6 +380,7 @@ Item {
     function startDismiss(notifyShell) {
         root.openingPending = false;
         root.closeSettings();
+        root.devicesOpen = false;
         root.hoveredIndex = -1;
         root.clearPreview();
         root.opened = false;
@@ -672,6 +678,7 @@ Item {
     }
 
     function openSettings() {
+        root.closeDevices();
         if (!root.surfaceMounted)
             root.open("{}");
         root.closeFooterHideConfirmation();
@@ -912,9 +919,9 @@ Item {
     }
 
     function refreshMacs() {
-        if (!root.showMacs || macProbe.running)
+        if ((!root.showMacs && !root.devicesOpen) || macProbe.running)
             return;
-        macProbe.command = [root.pluginDir + "/mac-status"];
+        macProbe.command = [root.pluginDir + "/device-config", "load"];
         macProbe.running = true;
     }
 
@@ -935,18 +942,75 @@ Item {
             Qt.callLater(root.refreshMacs);
     }
 
-    // Finds a remote-desktop client when clicked, then launches it on the Mac's
-    // Tailscale address, or explains how to install one.
+    // Connect button: one user connects straight away, several open the card's
+    // chooser (handled in MacRow), none asks for one to be added in the gear.
     function connectMac(mac) {
-        if (!MacModel.canConnect(mac) || clientProbe.running)
+        var plan = MacModel.connectPlan(mac);
+        if (plan.kind === "needUser")
+            root.showMacMessage(MacModel.needUserMessage(mac));
+        else if (plan.kind === "connect")
+            root.connectMacAs(mac, plan.user);
+    }
+
+    // ssh opens a terminal (argv only, no shell). VNC and RDP get a Remmina
+    // profile from device-config, which leaves the password empty so Remmina
+    // asks for it itself.
+    function connectMacAs(mac, user) {
+        if (!MacModel.canConnect(mac) || clientProbe.running || profileProc.running)
             return;
+        var known = (mac.users || []).some(function (u) { return u.name === user; });
+        if (!known)
+            return;
+        if (mac.protocol === "ssh") {
+            Quickshell.execDetached(["setsid", "uwsm-app", "--"].concat(MacModel.sshCommand(mac, user, mac.port)));
+            Quickshell.execDetached([root.pluginDir + "/device-config", "used", String(mac.id), String(user)]);
+            root.dismiss();
+            return;
+        }
         root.pendingMac = mac;
+        root.pendingUser = user;
+        clientProbe.command = MacModel.clientCheckCommand(root.pluginDir, mac.protocol);
         clientProbe.running = true;
     }
 
-    function showMacMessage(text) {
+    function showMacMessage(text, milliseconds) {
         root.macMessage = text;
+        macMessageTimer.interval = milliseconds || 12000;
         macMessageTimer.restart();
+    }
+
+    // Click-to-copy for the addresses on a card. Only strings that pass the
+    // same address checks as the config are ever copied.
+    function copyAddress(text) {
+        var value = MacModel.safeAddress(text);
+        if (value === "")
+            return;
+        Quickshell.execDetached(["wl-copy", "--", value]);
+        root.showMacMessage("Copied " + value, 2500);
+    }
+
+    function openDevices() {
+        root.closeSettings();
+        root.macLoaded = false;
+        root.devicesOpen = true;
+        root.refreshMacs();
+    }
+
+    function closeDevices() {
+        if (!root.devicesOpen)
+            return;
+        root.devicesOpen = false;
+        if (root.opened)
+            Qt.callLater(function () {
+                if (root.opened && !root.devicesOpen)
+                    root.focusKeyboardWindow();
+            });
+    }
+
+    function devicesSaved() {
+        root.closeDevices();
+        root.refreshMacs();
+        root.showMacMessage("Devices saved", 3000);
     }
 
     function refreshAgents() {
@@ -1584,6 +1648,17 @@ Item {
     }
 
     function handleKey(event, layout) {
+        if (root.devicesOpen) {
+            // Typing belongs to the focused field of the devices panel, never to
+            // the window search. Escape closes the panel and leaves Exposé open.
+            if (DeviceModel.keyAction(event.key, Qt.Key_Escape) === "close") {
+                root.closeDevices();
+                event.accepted = true;
+            } else {
+                event.accepted = false;
+            }
+            return;
+        }
         if (root.settingsOpen) {
             if (event.key === Qt.Key_Escape) {
                 if (root.footerHideConfirmationOpen)
@@ -1753,6 +1828,7 @@ Item {
             onStreamFinished: {
                 root.macNowMs = Date.now();
                 root.macResults = MacModel.parseResult(this.text);
+                root.macLoaded = true;
                 root.modelRevision++;
             }
         }
@@ -1760,20 +1836,34 @@ Item {
 
     Process {
         id: clientProbe
-        command: ["sh", "-c", "for c in remmina vncviewer krdc; do command -v $c >/dev/null && echo $c; done"]
         stdout: StdioCollector {
             onStreamFinished: {
                 var mac = root.pendingMac;
-                root.pendingMac = null;
-                var found = String(this.text).split("\n").filter(function (x) { return x; });
-                var argv = mac ? MacModel.clientCommand(found, mac) : [];
-                if (!argv.length) {
-                    root.showMacMessage(MacModel.noClientMessage());
+                var check = MacModel.parseClientCheck(this.text);
+                if (!check.ok || !mac) {
+                    root.pendingMac = null;
+                    root.showMacMessage(check.message, 20000);
                     return;
                 }
-                Quickshell.execDetached(["setsid", "uwsm-app", "--"].concat(argv));
-                root.dismiss();
+                profileProc.command = MacModel.profileCommand(root.pluginDir, mac, root.pendingUser);
+                profileProc.running = true;
             }
+        }
+    }
+
+    Process {
+        id: profileProc
+        stdout: StdioCollector { id: profileOut }
+        stderr: StdioCollector { id: profileErr }
+        onExited: {
+            root.pendingMac = null;
+            var path = String(profileOut.text).trim();
+            if (!MacModel.isProfilePath(path)) {
+                root.showMacMessage("Could not prepare the connection: " + String(profileErr.text).trim().slice(0, 200));
+                return;
+            }
+            Quickshell.execDetached(["setsid", "uwsm-app", "--"].concat(MacModel.remminaCommand(path)));
+            root.dismiss();
         }
     }
 
@@ -2437,7 +2527,7 @@ Item {
                                 controller: root
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: implicitHeight
-                                visible: overviewWindow.acceptsKeyboard && root.macList.length > 0
+                                visible: overviewWindow.acceptsKeyboard && root.showMacs && root.macLoaded
                             }
 
                             Text {
@@ -2558,6 +2648,23 @@ Item {
                                 onExited: settingsControl.hovered = false
                                 onClicked: root.openSettings()
                             }
+                        }
+                    }
+                }
+
+                Loader {
+                    id: devicesLayerLoader
+                    anchors.fill: parent
+                    active: root.devicesOpen && overviewWindow.acceptsKeyboard
+                    z: 190
+                    onLoaded: Qt.callLater(function () {
+                        if (devicesLayerLoader.item)
+                            devicesLayerLoader.item.forceActiveFocus(); // qmllint disable missing-property
+                    })
+
+                    sourceComponent: Component {
+                        DevicePanel {
+                            controller: root
                         }
                     }
                 }

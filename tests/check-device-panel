@@ -1,0 +1,23 @@
+#!/bin/bash
+# Load the real DevicePanel and MacRow against the shell theme with a mock controller.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+ln -s /usr/share/omarchy/shell/Commons "$test_dir/Commons"
+ln -s /usr/share/omarchy/shell/Ui "$test_dir/Ui"
+cp MacRow.qml MacModel.js WindowModel.js DeviceModel.js DeviceButton.qml DeviceSwitch.qml DeviceField.qml DeviceEditor.qml DevicePanel.qml "$test_dir/"
+cp tests/runtime/device-panel.qml "$test_dir/shell.qml"
+QT_QPA_PLATFORM=offscreen timeout 15s quickshell --no-color -p "$test_dir/shell.qml" > "$test_dir/output" 2>&1 || {
+  cat "$test_dir/output"
+  exit 1
+}
+if ! rg -q 'PASS: device panel' "$test_dir/output"; then
+  cat "$test_dir/output"
+  exit 1
+fi
+if rg -q 'FAIL:|TypeError|ReferenceError|Unable to assign|Binding loop|Failed to load configuration|is not a type|Cannot assign|[Rr]equired' "$test_dir/output"; then
+  cat "$test_dir/output"
+  exit 1
+fi
+echo "PASS: device panel runtime"

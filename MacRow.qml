@@ -6,19 +6,73 @@ import "WindowModel.js" as WindowModel
 import qs.Commons
 import qs.Commons as Commons
 
-// One card per Mac along the top of the card space. A remote-desktop window for
-// the Mac replaces the glyph with its live preview.
+// One card per device along the top of the card space, under a "Devices"
+// header with a gear that opens the configuration panel. A remote-desktop
+// window for the device replaces the glyph with its live preview.
 Item {
     id: row
 
     required property var controller
-    readonly property var macs: row.controller.macList
+    readonly property var macs: row.controller.macList.filter(function (d) { return d.hidden !== true; })
 
-    implicitHeight: Style.space(132)
+    implicitHeight: Style.space(34) + (row.macs.length > 0 ? Style.space(184) : 0)
+
+    Item {
+        id: headerBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: Style.space(34)
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Devices"
+            textFormat: Text.PlainText
+            style: Text.Outline
+            styleColor: Qt.rgba(0, 0, 0, 0.55)
+            color: Commons.Color.menu.text
+            font.family: Style.font.menuFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+        }
+
+        Rectangle {
+            id: gear
+            width: Style.space(28)
+            height: width
+            radius: Style.cornerRadius
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            color: row.controller.devicesOpen || gearMouse.containsMouse
+                ? Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.16)
+                : Qt.rgba(Commons.Color.menu.background.r, Commons.Color.menu.background.g, Commons.Color.menu.background.b, 0.5)
+
+            Text {
+                anchors.centerIn: parent
+                text: "⚙"
+                textFormat: Text.PlainText
+                color: Commons.Color.menu.text
+                font.pixelSize: Style.font.heading
+            }
+
+            MouseArea {
+                id: gearMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: row.controller.devicesOpen ? row.controller.closeDevices() : row.controller.openDevices()
+            }
+        }
+    }
 
     ListView {
         id: list
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: headerBar.bottom
+        anchors.bottom: parent.bottom
         orientation: ListView.Horizontal
         spacing: Style.spacing.sm
         clip: true
@@ -36,9 +90,12 @@ Item {
             readonly property var badge: MacModel.badge(card.mac)
             readonly property string notice: MacModel.screenSharingNotice(card.mac)
             readonly property bool connectable: MacModel.canConnect(card.mac)
+            readonly property var address: MacModel.addressInfo(card.mac)
+            readonly property var plan: MacModel.connectPlan(card.mac)
+            property bool choosing: false
             readonly property color ink: Commons.Color.menu.text
 
-            width: Style.space(330)
+            width: Style.space(340)
             height: list.height
             radius: Style.cornerRadius
             color: Qt.rgba(Commons.Color.menu.background.r, Commons.Color.menu.background.g, Commons.Color.menu.background.b, 0.72)
@@ -51,7 +108,7 @@ Item {
                 spacing: Style.spacing.md
 
                 Rectangle {
-                    Layout.preferredWidth: Style.space(112)
+                    Layout.preferredWidth: Style.space(96)
                     Layout.fillHeight: true
                     radius: Math.max(0, Style.cornerRadius - Style.spacing.sm)
                     color: Qt.rgba(card.ink.r, card.ink.g, card.ink.b, 0.08)
@@ -60,7 +117,7 @@ Item {
                     Text {
                         anchors.centerIn: parent
                         visible: !card.remoteWindow
-                        text: "🖥"
+                        text: MacModel.osGlyph(card.mac)
                         textFormat: Text.PlainText
                         style: Text.Outline
                         styleColor: Qt.rgba(0, 0, 0, 0.55)
@@ -113,6 +170,12 @@ Item {
                         }
                     }
 
+                    ColumnLayout {
+                    id: info
+                    Layout.fillWidth: true
+                    visible: !card.choosing
+                    spacing: 2
+
                     Text {
                         Layout.fillWidth: true
                         text: MacModel.stateText(card.mac) + "  ·  " + MacModel.lastSeenText(card.mac, row.controller.macNowMs)
@@ -122,6 +185,63 @@ Item {
                         font.family: Style.font.menuFamily
                         font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
+                    }
+
+                    Text {
+                        id: dnsText
+                        Layout.fillWidth: true
+                        visible: card.address.dns !== ""
+                        text: card.address.dns
+                        textFormat: Text.PlainText
+                        color: card.ink
+                        opacity: dnsMouse.containsMouse ? 1 : 0.6
+                        font.family: Style.font.menuFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideMiddle
+
+                        MouseArea {
+                            id: dnsMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: row.controller.copyAddress(card.address.dns)
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: card.address.ip !== "" || card.address.connection !== ""
+                        spacing: Style.spacing.sm
+
+                        Text {
+                            id: ipText
+                            visible: card.address.ip !== ""
+                            text: card.address.ip
+                            textFormat: Text.PlainText
+                            color: card.ink
+                            opacity: ipMouse.containsMouse ? 1 : 0.6
+                            font.family: Style.font.menuFamily
+                            font.pixelSize: Style.font.caption
+
+                            MouseArea {
+                                id: ipMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: row.controller.copyAddress(card.address.ip)
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: card.address.connection + (card.address.lan !== "" ? "  ·  LAN " + card.address.lan : "")
+                            textFormat: Text.PlainText
+                            color: card.ink
+                            opacity: 0.45
+                            font.family: Style.font.menuFamily
+                            font.pixelSize: Style.font.caption
+                            elide: Text.ElideRight
+                        }
                     }
 
                     Text {
@@ -146,6 +266,61 @@ Item {
                         font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
                     }
+                    }
+
+                    ListView {
+                        id: chooser
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        visible: card.choosing
+                        clip: true
+                        spacing: 3
+                        model: card.plan.users
+                        boundsBehavior: Flickable.StopAtBounds
+                        header: Text {
+                            width: chooser.width
+                            height: implicitHeight + 3
+                            text: "Connect as"
+                            textFormat: Text.PlainText
+                            color: card.ink
+                            opacity: 0.6
+                            font.family: Style.font.menuFamily
+                            font.pixelSize: Style.font.caption
+                        }
+
+                        delegate: Rectangle {
+                            id: userButton
+                            required property var modelData
+                            width: chooser.width
+                            height: Style.space(26)
+                            radius: Math.max(0, Style.cornerRadius - Style.spacing.sm)
+                            color: Qt.rgba(card.ink.r, card.ink.g, card.ink.b, userMouse.containsMouse ? 0.22 : 0.1)
+
+                            Text {
+                                anchors.fill: parent
+                                anchors.leftMargin: Style.spacing.sm
+                                anchors.rightMargin: Style.spacing.sm
+                                verticalAlignment: Text.AlignVCenter
+                                text: MacModel.userText(userButton.modelData)
+                                textFormat: Text.PlainText
+                                color: card.ink
+                                font.family: Style.font.menuFamily
+                                font.pixelSize: Style.font.bodySmall
+                                elide: Text.ElideRight
+                            }
+
+                            MouseArea {
+                                id: userMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    card.choosing = false;
+                                    row.controller.connectMacAs(card.mac, userButton.modelData.name);
+                                }
+                            }
+                        }
+                    }
 
                     Item { Layout.fillHeight: true }
 
@@ -159,7 +334,7 @@ Item {
 
                         Text {
                             anchors.centerIn: parent
-                            text: card.remoteWindow ? "Show" : "Connect"
+                            text: card.remoteWindow ? "Show" : (card.choosing ? "Cancel" : "Connect")
                             textFormat: Text.PlainText
                             color: card.connectable ? Commons.Color.menu.background : card.ink
                             opacity: card.connectable ? 1 : 0.45
@@ -174,7 +349,14 @@ Item {
                             hoverEnabled: true
                             enabled: card.connectable || card.remoteWindow !== null
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: card.remoteWindow ? row.controller.activate(card.remoteWindow) : row.controller.connectMac(card.mac)
+                            onClicked: {
+                                if (card.remoteWindow)
+                                    row.controller.activate(card.remoteWindow);
+                                else if (card.plan.kind === "choose")
+                                    card.choosing = !card.choosing;
+                                else
+                                    row.controller.connectMac(card.mac);
+                            }
                         }
                     }
                 }

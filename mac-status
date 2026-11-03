@@ -24,56 +24,21 @@ disk side effect. An optional "_fixture" object supplies the rest:
 import concurrent.futures
 import json
 import os
-import re
-import socket
 import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import devices_core as core  # noqa: E402
+from devices_core import classify, parse_pmset, port_open, cached_power  # noqa: E402,F401
+
 PORTS = {"screenSharing": 5900, "ard": 3283, "ssh": 22}
-PROBE_TIMEOUT = 1.0
-PMSET_TTL = 600
-# A Mac that dropped off this recently is most likely asleep, not shut down.
-RECENT_OFFLINE = 12 * 3600
-STATE_DIR = os.path.expanduser("~/.local/state/expose-mucholove")
 CONFIG_PATH = os.path.expanduser("~/.config/omarchy/expose-macs.json")
-
-
-def parse_time(text):
-    """RFC 3339 timestamp (nanoseconds, any offset) to epoch seconds; 0 if unset."""
-    if not text or text.startswith("0001-"):
-        return 0
-    m = re.match(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)?$", text)
-    if not m:
-        return 0
-    y, mo, d, h, mi, s, tz = m.groups()
-    import calendar
-    epoch = calendar.timegm((int(y), int(mo), int(d), int(h), int(mi), int(s)))
-    if tz and tz != "Z":
-        sign = 1 if tz[0] == "+" else -1
-        epoch -= sign * (int(tz[1:3]) * 3600 + int(tz[4:6]) * 60)
-    return epoch
 
 
 def mac_peers(status):
     """Tailscale peers running macOS, as plain dicts."""
-    peers = []
-    for peer in (status.get("Peer") or {}).values():
-        if str(peer.get("OS", "")).lower() not in ("macos", "darwin"):
-            continue
-        ips = [ip for ip in peer.get("TailscaleIPs") or [] if ":" not in ip]
-        if not ips:
-            continue
-        dns = str(peer.get("DNSName", "")).rstrip(".")
-        label = dns.split(".")[0] if dns else str(peer.get("HostName", ""))
-        peers.append({
-            "id": label,
-            "hostName": str(peer.get("HostName", "")),
-            "ip": ips[0],
-            "online": peer.get("Online") is True,
-            "lastSeen": parse_time(str(peer.get("LastSeen", ""))),
-        })
-    return sorted(peers, key=lambda p: p["id"])
+    return core.peers(status, ("macos",))
 
 
 def config_for(peer, config):
@@ -83,108 +48,6 @@ def config_for(peer, config):
         if match and any(match in item for item in needle):
             return entry
     return {}
-
-
-def parse_pmset(text):
-    """AC-power sleep minutes and wake-on-network from `pmset -g [custom]`.
-
-    Returns {"sleep": int|None, "womp": bool|None}; None when not present.
-    `pmset -g custom` has "AC Power:" / "Battery Power:" sections, `pmset -g`
-    one flat list of the current settings.
-    """
-    section, values = "", {}
-    for line in str(text).splitlines():
-        stripped = line.strip()
-        if stripped.endswith(":") and " " in stripped.rstrip(":"):
-            section = stripped.lower()
-            continue
-        m = re.match(r"^(\w+)\s+(\d+)\b", stripped)
-        if not m:
-            continue
-        key, value = m.group(1), int(m.group(2))
-        if section.startswith("battery"):
-            continue
-        values.setdefault(key, value)
-    sleep, womp = values.get("sleep"), values.get("womp")
-    return {"sleep": sleep, "womp": None if womp is None else womp != 0}
-
-
-def duration(seconds):
-    seconds = max(0, int(seconds))
-    if seconds < 90:
-        return "moments"
-    if seconds < 3600:
-        return f"{seconds // 60} min"
-    if seconds < 86400:
-        return f"{seconds // 3600}h"
-    return f"{seconds // 86400}d"
-
-
-def classify(online, last_seen, now, power, expected=True):
-    """State, always-on verdict and reasons from facts.
-
-    power is {"sleep": int|None, "womp": bool|None} or None when unknown.
-    alwaysOn: True/False, or None (unknown) when online but power settings
-    could not be read.
-    """
-    reasons = []
-    sleep = power.get("sleep") if power else None
-    if not online:
-        age = now - last_seen if last_seen else None
-        recent = age is not None and age < RECENT_OFFLINE
-        reasons.append(f"offline {duration(age)}" if age is not None else "offline")
-        return {"state": "sleeps" if recent else "offline", "alwaysOn": False, "reasons": reasons}
-    if sleep is None:
-        return {"state": "online", "alwaysOn": None, "reasons": ["power settings unknown"]}
-    if sleep > 0:
-        reasons.append(f"sleeps after {sleep} min")
-        if power.get("womp") is False:
-            reasons.append("Wake for network access is off")
-        return {"state": "sleeps", "alwaysOn": False, "reasons": reasons}
-    if power.get("womp") is False:
-        reasons.append("Wake for network access is off")
-    return {"state": "online", "alwaysOn": True, "reasons": reasons}
-
-
-def port_open(ip, port):
-    try:
-        with socket.create_connection((ip, port), PROBE_TIMEOUT):
-            return True
-    except OSError:
-        return False
-
-
-def cached_power(ip, user):
-    """Power settings via cache or a BatchMode ssh; None when unavailable."""
-    path = os.path.join(STATE_DIR, "pmset-" + re.sub(r"[^0-9a-zA-Z.]", "_", ip) + ".json")
-    try:
-        with open(path) as f:
-            cached = json.load(f)
-        if time.time() - float(cached.get("at", 0)) < PMSET_TTL and cached.get("user") == user:
-            return cached.get("power")
-    except (OSError, ValueError):
-        pass
-    power = None
-    target = f"{user}@{ip}" if user else ip
-    try:
-        for command in ("pmset -g custom", "pmset -g"):
-            out = subprocess.run(
-                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", target, command],
-                capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL)
-            if out.returncode == 0:
-                parsed = parse_pmset(out.stdout)
-                if parsed["sleep"] is not None:
-                    power = parsed
-                    break
-    except (OSError, subprocess.SubprocessError):
-        power = None
-    try:
-        os.makedirs(STATE_DIR, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump({"at": time.time(), "user": user, "power": power}, f)
-    except OSError:
-        pass
-    return power
 
 
 def build(status, config, now, probe, power_of):

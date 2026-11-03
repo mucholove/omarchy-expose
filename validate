@@ -21,6 +21,8 @@ QT_QPA_PLATFORM=offscreen "$qt6_bin/qmltestrunner" -input tests
 ./tests/check-hot-corner-runtime
 ./tests/check-theme-runtime
 ./tests/check-mac-status
+./tests/check-device-config
+./tests/check-device-panel
 
 # Make the installed UI component types visible to qmllint. Commons' dynamic
 # singleton objects remain runtime-injected, as in the shell itself.
@@ -35,15 +37,15 @@ ln -s /usr/share/omarchy/shell/Ui "$lint_dir/qs/Ui"
   --max-warnings 0 \
   --unqualified disable \
   --block-scope-var-declaration disable \
-  Overview.qml WindowCard.qml SessionSidebar.qml ActivityPanel.qml MacRow.qml WindowBorders.qml SettingsView.qml ThemedControl.qml ThemeDivider.qml PluginSettings.qml
+  Overview.qml WindowCard.qml SessionSidebar.qml ActivityPanel.qml MacRow.qml DeviceButton.qml DeviceSwitch.qml DeviceField.qml DeviceEditor.qml DevicePanel.qml WindowBorders.qml SettingsView.qml ThemedControl.qml ThemeDivider.qml PluginSettings.qml
 
 # Lint the runtime fixture after injecting its host functions and imports.
 ./tests/check-settings-runtime --lint
 
-bash -n tests/check-mac-status activate-window background-blur-session tests/check-theme-runtime tests/check-settings-runtime tests/check-hot-corner-runtime tests/check-blur-lock
+bash -n tests/check-mac-status tests/check-device-config tests/check-device-panel activate-window background-blur-session tests/check-theme-runtime tests/check-settings-runtime tests/check-hot-corner-runtime tests/check-blur-lock
 timeout 15s ./tests/check-blur-lock
 
-python3 -c "import ast; ast.parse(open('mac-status').read())"
+python3 -c "import ast; [ast.parse(open(f).read()) for f in ('mac-status', 'device-config', 'devices_core.py')]"
 omarchy plugin validate .
 
 echo "validate: all checks passed"

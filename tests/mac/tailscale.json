@@ -1,19 +1,157 @@
 {
  "Peer": {
-  "a": {"HostName": "Gustavo’s Mac mini", "DNSName": "gustavos-mac-mini.ts.net.", "OS": "macOS", "TailscaleIPs": ["100.1.1.1", "fd7a::1"], "Online": true, "LastSeen": "0001-01-01T00:00:00Z"},
-  "b": {"HostName": "Gustavo’s MacBook Air", "DNSName": "gustavos-macbook-air.ts.net.", "OS": "macOS", "TailscaleIPs": ["100.1.1.2"], "Online": true, "LastSeen": "0001-01-01T00:00:00Z"},
-  "c": {"HostName": "Gustavo’s MacBook Pro", "DNSName": "gustavos-macbook-pro.ts.net.", "OS": "macOS", "TailscaleIPs": ["100.1.1.3"], "Online": false, "LastSeen": "2026-10-26T10:00:00-04:00"},
-  "d": {"HostName": "Old iMac", "DNSName": "old-imac.ts.net.", "OS": "macOS", "TailscaleIPs": ["100.1.1.4"], "Online": false, "LastSeen": "2026-10-01T10:00:00Z"},
-  "e": {"HostName": "pixel", "DNSName": "pixel.ts.net.", "OS": "android", "TailscaleIPs": ["100.1.1.5"], "Online": true, "LastSeen": "0001-01-01T00:00:00Z"},
-  "f": {"HostName": "Mac Studio", "DNSName": "mac-studio.ts.net.", "OS": "macOS", "TailscaleIPs": ["100.1.1.6"], "Online": true, "LastSeen": "0001-01-01T00:00:00Z"}
+  "a": {
+   "HostName": "Gustavo\u2019s Mac mini",
+   "DNSName": "gustavos-mac-mini.mandrill-perch.ts.net.",
+   "OS": "macOS",
+   "TailscaleIPs": [
+    "100.1.1.1",
+    "fd7a:115c:a1e0::3501:cc8d"
+   ],
+   "Online": true,
+   "LastSeen": "0001-01-01T00:00:00Z",
+   "CurAddr": "10.0.0.35:41641",
+   "Relay": "mia"
+  },
+  "b": {
+   "HostName": "Gustavo\u2019s MacBook Air",
+   "DNSName": "gustavos-macbook-air.ts.net.",
+   "OS": "macOS",
+   "TailscaleIPs": [
+    "100.1.1.2"
+   ],
+   "Online": true,
+   "LastSeen": "0001-01-01T00:00:00Z",
+   "CurAddr": "",
+   "Relay": "mia"
+  },
+  "c": {
+   "HostName": "Gustavo\u2019s MacBook Pro",
+   "DNSName": "gustavos-macbook-pro.ts.net.",
+   "OS": "macOS",
+   "TailscaleIPs": [
+    "100.1.1.3"
+   ],
+   "Online": false,
+   "LastSeen": "2026-10-26T10:00:00-04:00",
+   "CurAddr": "",
+   "Relay": ""
+  },
+  "d": {
+   "HostName": "Old iMac",
+   "DNSName": "old-imac.ts.net.",
+   "OS": "macOS",
+   "TailscaleIPs": [
+    "100.1.1.4"
+   ],
+   "Online": false,
+   "LastSeen": "2026-10-01T10:00:00Z"
+  },
+  "e": {
+   "HostName": "pixel",
+   "DNSName": "pixel.ts.net.",
+   "OS": "android",
+   "TailscaleIPs": [
+    "100.1.1.5"
+   ],
+   "Online": true,
+   "LastSeen": "0001-01-01T00:00:00Z"
+  },
+  "f": {
+   "HostName": "Mac Studio",
+   "DNSName": "mac-studio.ts.net.",
+   "OS": "macOS",
+   "TailscaleIPs": [
+    "100.1.1.6"
+   ],
+   "Online": true,
+   "LastSeen": "0001-01-01T00:00:00Z"
+  },
+  "g": {
+   "HostName": "Office PC",
+   "DNSName": "office-pc.ts.net.",
+   "OS": "windows",
+   "TailscaleIPs": [
+    "100.1.1.7"
+   ],
+   "Online": true,
+   "LastSeen": "0001-01-01T00:00:00Z",
+   "CurAddr": "[2001:db8::7]:41641",
+   "Relay": "fra"
+  },
+  "h": {
+   "HostName": "aperture",
+   "DNSName": "aperture.ts.net.",
+   "OS": "linux",
+   "TailscaleIPs": [
+    "100.1.1.8"
+   ],
+   "Online": true,
+   "LastSeen": "0001-01-01T00:00:00Z",
+   "CurAddr": "",
+   "Relay": "fra\nevil"
+  },
+  "i": {
+   "HostName": "iphone",
+   "DNSName": "iphone.ts.net.",
+   "OS": "iOS",
+   "TailscaleIPs": [
+    "100.1.1.9"
+   ],
+   "Online": true,
+   "LastSeen": "0001-01-01T00:00:00Z"
+  },
+  "j": {
+   "HostName": "me",
+   "DNSName": "me.ts.net.",
+   "OS": "linux",
+   "TailscaleIPs": [
+    "100.1.1.10"
+   ],
+   "Online": true,
+   "Self": true,
+   "LastSeen": "0001-01-01T00:00:00Z"
+  }
  },
  "_fixture": {
   "now": 1793034000,
-  "ports": {"100.1.1.1": [5900, 22, 3283], "100.1.1.2": [22, 3283], "100.1.1.6": [5900, 3283]},
+  "ports": {
+   "100.1.1.1": [
+    5900,
+    22,
+    3283
+   ],
+   "100.1.1.2": [
+    22,
+    3283
+   ],
+   "100.1.1.6": [
+    5900,
+    3283
+   ],
+   "100.1.1.7": [
+    3389
+   ],
+   "100.1.1.8": [
+    22
+   ]
+  },
   "pmset": {
    "100.1.1.1": "AC Power:\n sleep 0\n womp 1\n",
    "100.1.1.2": "Battery Power:\n sleep 1\nAC Power:\n sleep 10\n womp 0\n"
   },
-  "config": {"macs": [{"match": "imac", "alwaysOn": false, "name": "Studio iMac"}, {"match": "mini", "user": "gustavo"}]}
+  "config": {
+   "macs": [
+    {
+     "match": "imac",
+     "alwaysOn": false,
+     "name": "Studio iMac"
+    },
+    {
+     "match": "mini",
+     "user": "gustavo"
+    }
+   ]
+  }
  }
 }

@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""Device list for Exposé: Tailscale computers merged with a safe config file.
+
+Usage:
+  device-config load [--fixture FILE] [--no-ssh]   merged devices, JSON on stdout
+  device-config save [--fixture FILE]              JSON device list on stdin
+  device-config profile ID USER [--fixture FILE]   write a Remmina profile, print its path
+  device-config used ID USER [--fixture FILE]      remember USER as last used for ID
+  device-config check-client vnc|rdp               {"ok", "message"}: Remmina and its plugin libraries
+
+Config: ~/.config/omarchy/expose-devices.json (version 1), written only by
+`save`: atomic, mode 0600 in a 0700 directory, one .bak, never through a
+symlink. The legacy ~/.config/omarchy/expose-macs.json is read as a fallback
+and never written. No password is ever stored, accepted, logged or passed.
+
+--fixture FILE reads canned `tailscale status --json` (with an optional
+"_fixture": {"now", "ports": {ip: [..]}, "pmset": {ip: text}}) and skips the
+network and ssh. The config is always read from $HOME.
+"""
+import concurrent.futures
+import json
+import os
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import devices_core as core  # noqa: E402
+
+OSES = ("macos", "windows", "linux")
+
+
+def fixture_arg(argv):
+    if "--fixture" in argv:
+        i = argv.index("--fixture")
+        return argv[i + 1] if i + 1 < len(argv) else None
+    return None
+
+
+def positional(argv):
+    out, skip = [], False
+    for i, a in enumerate(argv):
+        if skip:
+            skip = False
+        elif a == "--fixture":
+            skip = True
+        elif not a.startswith("--"):
+            out.append(a)
+    return out
+
+
+def get_status(fixture):
+    if fixture:
+        with open(fixture) as f:
+            return json.load(f)
+    return core.tailscale_status()
+
+
+def device_row(peer, entry, ports, power, now, use_ssh_state):
+    """One merged device. peer may be None (manual / missing device)."""
+    default_proto = core.OS_PROTOCOL.get(peer["os"], "ssh") if peer else entry["protocol"]
+    cfg = entry or core.default_entry(peer["id"], peer["id"], default_proto)
+    proto = cfg["protocol"]
+    host = cfg["address"] or (peer["ip"] if peer else "")
+    port = cfg["port"] or core.DEFAULT_PORTS[proto]
+    port_ok = port in ports
+    if peer:
+        online, last_seen = peer["online"], peer["lastSeen"]
+    else:
+        online, last_seen = port_ok, 0
+    is_mac = bool(peer) and peer["os"] == "macos"
+    verdict = core.classify(online, last_seen, now, power) if is_mac else core.classify_other(online, last_seen, now)
+    users = cfg["users"]
+    return {
+        "id": cfg["id"],
+        "name": cfg["name"] or (peer["hostName"] or peer["id"] if peer else cfg["id"]),
+        "hostName": peer["hostName"] if peer else "",
+        "os": peer["os"] if peer else "",
+        "source": "tailscale" if peer else ("manual" if cfg["address"] else "missing"),
+        "ip": peer["ip"] if peer else "",
+        "ips": peer["ips"] if peer else [],
+        "dnsName": peer["dnsName"] if peer else "",
+        "lanAddress": peer["lanAddress"] if peer else "",
+        "connection": peer["connection"] if peer else "",
+        "host": host,
+        "protocol": proto,
+        "defaultProtocol": default_proto,
+        "port": port,
+        "portOpen": port_ok,
+        "online": online,
+        "lastSeen": last_seen,
+        "sleepMinutes": power["sleep"] if power else None,
+        "wakeForNetwork": power["womp"] if power else None,
+        "expected": cfg["alwaysOn"],
+        "trackPower": is_mac,
+        "hidden": cfg["hidden"],
+        "notes": cfg["notes"],
+        "users": users,
+        "lastUser": "",
+        "config": cfg,
+        **verdict,
+    }
+
+
+def merged(fixture, probe=True, use_ssh=True):
+    """(rows, warnings, source). Probes ports concurrently when probe is set."""
+    extra = {}
+    status = get_status(fixture)
+    if fixture:
+        extra = status.get("_fixture") or {}
+    now = float(extra.get("now", time.time())) if fixture else time.time()
+    entries, warnings, source = core.load_config()
+    peer_list = core.peers(status, OSES)
+    peer_entry, claimed = core.match_peer_entries(peer_list, entries)
+    jobs = [(p, peer_entry.get(p["id"])) for p in peer_list]
+    jobs += [(None, e) for e in entries if e["id"] not in claimed and (e["address"] or source == "file")]
+
+    def probe_ports(host, wanted):
+        if not host or not probe:
+            return set()
+        if fixture:
+            return set(extra.get("ports", {}).get(host, [])) & set(wanted)
+        return {p for p in wanted if core.port_open(host, p)}
+
+    def one(job):
+        peer, entry = job
+        cfg = entry or core.default_entry(peer["id"], peer["id"], core.OS_PROTOCOL.get(peer["os"], "ssh"))
+        if peer and not entry:
+            cfg = dict(cfg)
+        host = cfg["address"] or (peer["ip"] if peer else "")
+        proto_port = cfg["port"] or core.DEFAULT_PORTS[cfg["protocol"]]
+        wanted = {proto_port}
+        is_mac = bool(peer) and peer["os"] == "macos"
+        if is_mac:
+            wanted.add(22)
+        reachable = peer["online"] if peer else True
+        ports = probe_ports(host, wanted) if reachable else set()
+        power = None
+        if is_mac and reachable and 22 in ports and use_ssh and cfg["users"]:
+            user = cfg["users"][0]["name"]
+            if fixture:
+                text = extra.get("pmset", {}).get(host)
+                power = core.parse_pmset(text) if text else None
+            else:
+                power = core.cached_power(host, user)
+        return device_row(peer, entry, ports, power, now, use_ssh)
+
+    rows = []
+    if jobs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(jobs))) as pool:
+            rows = list(pool.map(one, jobs))
+    last = core.last_users()
+    for row in rows:
+        names = [u["name"] for u in row["users"]]
+        if last.get(row["id"]) in names:
+            row["lastUser"] = last[row["id"]]
+    return rows, warnings, source, int(now), peer_list
+
+
+def cmd_load(argv):
+    fixture = fixture_arg(argv)
+    error = ""
+    try:
+        rows, warnings, source, now, _ = merged(fixture, use_ssh="--no-ssh" not in argv)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        rows, warnings, source, now, error = [], [], "none", int(time.time()), str(exc)
+    print(json.dumps({"version": 1, "devices": rows, "checkedAt": now, "error": error,
+                      "warnings": warnings, "configSource": source}))
+    return 0
+
+
+def read_stdin_json():
+    """Read stdin until it holds one complete JSON document or reaches EOF.
+    Returning at the first complete document means a caller that keeps stdin
+    open (Quickshell's Process) cannot make this wait forever."""
+    buf = b""
+    while True:
+        chunk = os.read(0, 65536)
+        buf += chunk
+        if len(buf) > core.MAX_FILE:
+            raise ValueError("input too large")
+        try:
+            return json.loads(buf.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            if not chunk:
+                raise ValueError("incomplete or invalid JSON")
+
+
+def cmd_save(argv):
+    try:
+        data = read_stdin_json()
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "errors": [f"input is not valid JSON: {exc}"]}))
+        return 0
+    entries = data.get("devices") if isinstance(data, dict) else data
+    defaults = {}
+    try:
+        for p in core.peers(get_status(fixture_arg(argv)), OSES):
+            defaults[p["id"]] = core.OS_PROTOCOL.get(p["os"], "ssh")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    ok, errors = core.save_config(entries, defaults)
+    print(json.dumps({"ok": ok, "errors": errors}))
+    return 0
+
+
+def find_device(dev_id, user, fixture):
+    if not core.ID_RE.match(dev_id) or not core.USER_RE.match(user):
+        raise core.ConfigError("invalid device id or user name")
+    rows, _, _, _, _ = merged(fixture, probe=False, use_ssh=False)
+    for row in rows:
+        if row["id"] == dev_id:
+            if user not in [u["name"] for u in row["users"]]:
+                raise core.ConfigError("that user is not configured for this device")
+            return row
+    raise core.ConfigError("unknown device")
+
+
+def cmd_profile(argv):
+    args = positional(argv)
+    try:
+        if len(args) != 2:
+            raise core.ConfigError("usage: device-config profile ID USER")
+        row = find_device(args[0], args[1], fixture_arg(argv))
+        if row["protocol"] not in ("vnc", "rdp"):
+            raise core.ConfigError("Remmina profiles are for VNC and RDP devices")
+        path = core.write_profile(row["config"], args[1], row["host"], row["port"])
+        core.remember_user(row["id"], args[1])
+    except (core.ConfigError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"device-config: {exc}", file=sys.stderr)
+        return 1
+    print(path)
+    return 0
+
+
+def cmd_used(argv):
+    args = positional(argv)
+    try:
+        if len(args) != 2:
+            raise core.ConfigError("usage: device-config used ID USER")
+        row = find_device(args[0], args[1], fixture_arg(argv))
+        core.remember_user(row["id"], args[1])
+    except (core.ConfigError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"device-config: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_check_client(argv):
+    import shutil
+    args = positional(argv)
+    protocol = args[0] if args else ""
+    print(json.dumps(core.client_check(protocol, shutil.which("remmina") is not None)))
+    return 0
+
+
+def main(argv):
+    commands = {"load": cmd_load, "save": cmd_save, "profile": cmd_profile, "used": cmd_used,
+                "check-client": cmd_check_client}
+    if not argv or argv[0] not in commands:
+        print(__doc__, file=sys.stderr)
+        return 2
+    return commands[argv[0]](argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

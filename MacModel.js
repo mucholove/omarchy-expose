@@ -3,14 +3,17 @@
 // Macs come from ./mac-status. This file turns its facts into what the cards say.
 
 var CLIENT_CLASSES = ["remmina", "vncviewer", "krdc", "tigervnc", "xtigervncviewer"];
-var INSTALL_LINE = "sudo pacman -S remmina";
+var INSTALL_LINE = "sudo pacman -S remmina libvncserver freerdp";
 
 function parseResult(text) {
     try {
         var value = JSON.parse(String(text || ""));
-        return value && Array.isArray(value.macs) ? value : { macs: [], error: String((value && value.error) || "") };
+        var list = value && Array.isArray(value.devices) ? value.devices : (value && Array.isArray(value.macs) ? value.macs : null);
+        if (!list)
+            return { macs: [], devices: [], error: String((value && value.error) || ""), warnings: [] };
+        return { macs: list, devices: list, error: String(value.error || ""), warnings: value.warnings || [] };
     } catch (error) {
-        return { macs: [], error: "" };
+        return { macs: [], devices: [], error: "", warnings: [] };
     }
 }
 
@@ -46,9 +49,10 @@ function lastSeenText(mac, nowMs) {
     return "last seen " + ageText(nowMs / 1000 - mac.lastSeen) + " ago";
 }
 
-// {kind: ok|warn|unknown|none, text}. A Mac not expected to stay on never warns.
+// {kind: ok|warn|unknown|none, text}. Only macOS devices have a power verdict,
+// and a device not expected to stay on never warns.
 function badge(mac) {
-    if (!mac)
+    if (!mac || mac.trackPower === false)
         return { kind: "none", text: "" };
     if (mac.alwaysOn === true)
         return { kind: "ok", text: "✓ always on" };
@@ -64,14 +68,25 @@ function badgeColor(kind) {
     return kind === "ok" ? "#4ADE80" : (kind === "warn" ? "#F59E0B" : "#9CA3AF");
 }
 
+var PROTOCOL_NAMES = { vnc: "VNC", rdp: "RDP", ssh: "SSH" };
+
+function osGlyph(mac) {
+    return mac && mac.os === "windows" ? "🪟" : (mac && mac.os === "linux" ? "🐧" : "🖥");
+}
+
+// Says why Connect is unavailable while the device is up.
 function screenSharingNotice(mac) {
-    if (!mac || !mac.online || mac.screenSharing)
+    if (!mac || !mac.online || mac.portOpen === true)
         return "";
-    return "Screen Sharing is off";
+    if (mac.protocol === "rdp")
+        return "Remote Desktop (RDP) is not answering";
+    if (mac.protocol === "ssh")
+        return "SSH is not answering";
+    return mac.os === "macos" ? "Screen Sharing is off" : "VNC is not answering";
 }
 
 function canConnect(mac) {
-    return Boolean(mac) && mac.online === true && mac.screenSharing === true;
+    return Boolean(mac) && mac.online === true && mac.portOpen === true && Boolean(mac.host);
 }
 
 function connectHint(mac) {
@@ -79,26 +94,113 @@ function connectHint(mac) {
         return "";
     if (!mac.online)
         return "Offline. It must wake before you can connect.";
-    if (!mac.screenSharing)
-        return "Turn on System Settings > General > Sharing > Screen Sharing on this Mac.";
+    if (!mac.portOpen)
+        return mac.os === "macos" && mac.protocol === "vnc"
+            ? "Turn on System Settings > General > Sharing > Screen Sharing on this Mac."
+            : "Nothing is listening on the " + (PROTOCOL_NAMES[mac.protocol] || "") + " port.";
     return "";
 }
 
-// First installed client wins; Remmina's VNC plugin speaks Apple's ARD login.
-function clientCommand(available, mac) {
-    var have = available || [];
-    var target = (mac.user ? mac.user + "@" : "") + mac.ip;
-    if (have.indexOf("remmina") !== -1)
-        return ["remmina", "-c", "vnc://" + target];
-    if (have.indexOf("vncviewer") !== -1)
-        return ["vncviewer", mac.ip];
-    if (have.indexOf("krdc") !== -1)
-        return ["krdc", "vnc://" + mac.ip];
-    return [];
+// Users with the last used one first; [{name, label}].
+function orderedUsers(device) {
+    var users = (device && device.users) ? device.users.slice() : [];
+    var last = device ? device.lastUser : "";
+    var first = users.filter(function (u) { return u.name === last; });
+    return first.concat(users.filter(function (u) { return u.name !== last; }));
+}
+
+function userText(user) {
+    return user.label ? user.label + " (" + user.name + ")" : user.name;
+}
+
+// What the Connect button does: {kind: none|needUser|connect|choose, user, users}
+function connectPlan(device) {
+    var users = orderedUsers(device);
+    if (!canConnect(device))
+        return { kind: "none", user: "", users: users };
+    if (users.length === 0)
+        return { kind: "needUser", user: "", users: users };
+    if (users.length === 1)
+        return { kind: "connect", user: users[0].name, users: users };
+    return { kind: "choose", user: "", users: users };
+}
+
+function needUserMessage(device) {
+    return "Add a user for " + (device ? device.name : "this device") + " in the gear (Devices > Configure) before connecting.";
+}
+
+// ssh opens a terminal; argv only, no shell. "--" keeps the target from
+// being read as an option.
+function sshCommand(device, user, port) {
+    var argv = ["xdg-terminal-exec", "ssh"];
+    if (port && port !== 22)
+        argv.push("-p", String(port));
+    argv.push("--", user + "@" + device.host);
+    return argv;
+}
+
+function remminaCommand(profilePath) {
+    return ["remmina", "-c", profilePath];
+}
+
+function profileCommand(pluginDir, device, user) {
+    return [pluginDir + "/device-config", "profile", device.id, user];
+}
+
+// Reply of `device-config check-client`: {ok, message}. Anything unreadable
+// counts as a failure so a broken helper never launches a half-working client.
+function parseClientCheck(text) {
+    try {
+        var value = JSON.parse(String(text || ""));
+        if (value && value.ok === true)
+            return { ok: true, message: "" };
+        return { ok: false, message: String((value && value.message) || noClientMessage()) };
+    } catch (error) {
+        return { ok: false, message: noClientMessage() };
+    }
+}
+
+function clientCheckCommand(pluginDir, protocol) {
+    return [pluginDir + "/device-config", "check-client", protocol];
+}
+
+function isProfilePath(text) {
+    return /^\/[^\n]*\.remmina$/.test(String(text || ""));
+}
+
+// Shown and copied only when they pass the same address checks as the config.
+var IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
+var IPV6_RE = /^(?=.*:)[0-9A-Fa-f:.]{2,45}$/;
+var HOST_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+
+function safeAddress(text) {
+    var value = String(text === undefined || text === null ? "" : text).trim();
+    return value !== "" && (IPV4_RE.test(value) || IPV6_RE.test(value) || HOST_RE.test(value)) ? value : "";
+}
+
+function tailscaleV4(device) {
+    var ips = (device && device.ips) || [];
+    for (var i = 0; i < ips.length; i++)
+        if (IPV4_RE.test(String(ips[i])))
+            return String(ips[i]);
+    return safeAddress(device && device.ip);
+}
+
+// {dns, ip, lan, connection} for the card and the editor; each already safe.
+function addressInfo(device) {
+    if (!device)
+        return { dns: "", ip: "", lan: "", connection: "" };
+    var connection = String(device.connection || "");
+    return {
+        dns: safeAddress(device.dnsName),
+        ip: tailscaleV4(device),
+        lan: connection === "direct" ? safeAddress(device.lanAddress) : "",
+        connection: /^[A-Za-z0-9 ._-]{0,60}$/.test(connection) ? connection : ""
+    };
 }
 
 function noClientMessage() {
-    return "No remote desktop client found. Install one with: " + INSTALL_LINE;
+    return "Remmina is not installed. Install it with: " + INSTALL_LINE;
 }
 
 function isClientClass(appId) {

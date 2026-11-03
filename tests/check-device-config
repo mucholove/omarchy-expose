@@ -1,0 +1,203 @@
+#!/bin/bash
+# device-config against canned tailscale JSON and a throwaway HOME. Never
+# touches the real home directory.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+root=$PWD
+export HOME
+HOME=$(mktemp -d)
+trap 'rm -rf "$HOME"' EXIT
+fx=$root/tests/mac/tailscale.json
+dc() { "$root/device-config" "$@"; }
+
+python3 - "$root" "$fx" <<'EOF'
+import json, os, stat, subprocess, sys
+root, fx = sys.argv[1], sys.argv[2]
+home = os.environ["HOME"]
+conf = os.path.join(home, ".config/omarchy/expose-devices.json")
+
+def run(*args, stdin=None):
+    p = subprocess.run([os.path.join(root, "device-config"), *args, "--fixture", fx],
+                       input=stdin, capture_output=True, text=True)
+    return p
+
+def load():
+    p = run("load")
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+def save(devices):
+    p = run("save", stdin=json.dumps({"devices": devices}))
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+def dev(**kw):
+    base = {"id": "x", "match": "", "name": "", "address": "", "protocol": "ssh", "port": None,
+            "alwaysOn": True, "hidden": False, "notes": "", "users": []}
+    base.update(kw)
+    return base
+
+# ---- discovery: macOS, Windows, Linux; not iOS/Android, not Self
+out = load()
+assert out["error"] == "" and out["configSource"] == "none", out
+by = {d["id"]: d for d in out["devices"]}
+assert set(by) == {"gustavos-mac-mini", "gustavos-macbook-air", "gustavos-macbook-pro", "old-imac",
+                   "mac-studio", "office-pc", "aperture"}, sorted(by)
+assert (by["office-pc"]["protocol"], by["office-pc"]["port"], by["office-pc"]["portOpen"]) == ("rdp", 3389, True)
+assert (by["aperture"]["protocol"], by["aperture"]["port"], by["aperture"]["portOpen"]) == ("ssh", 22, True)
+assert by["aperture"]["alwaysOn"] is None and not by["aperture"]["trackPower"]
+assert (by["mac-studio"]["protocol"], by["mac-studio"]["portOpen"], by["mac-studio"]["trackPower"]) == ("vnc", True, True)
+assert not by["gustavos-macbook-air"]["portOpen"]
+
+# ---- network address fields
+mini = by["gustavos-mac-mini"]
+assert mini["dnsName"] == "gustavos-mac-mini.mandrill-perch.ts.net", mini["dnsName"]
+assert mini["ip"] == "100.1.1.1" and mini["ips"] == ["100.1.1.1", "fd7a:115c:a1e0::3501:cc8d"]
+assert (mini["lanAddress"], mini["connection"]) == ("10.0.0.35", "direct"), mini
+assert (by["gustavos-macbook-air"]["lanAddress"], by["gustavos-macbook-air"]["connection"]) == ("", "relayed via mia")
+assert by["office-pc"]["lanAddress"] == "2001:db8::7" and by["office-pc"]["connection"] == "direct"
+assert by["aperture"]["connection"] == "relayed via fraevil", by["aperture"]["connection"]  # control chars stripped
+assert by["gustavos-macbook-pro"]["connection"] == ""  # offline
+
+# ---- defaults let a new device show up; saving pristine peers writes nothing for them
+r = save([d["config"] for d in out["devices"]])
+assert r == {"ok": True, "errors": []}, r
+assert json.load(open(conf))["devices"] == [], "pristine discovered devices must not be persisted"
+
+# ---- save/load round trip with users; SSH pmset probe uses the first user
+r = save([dev(id="gustavos-mac-mini", match="gustavos-mac-mini", name="Mac mini", protocol="vnc",
+              users=[{"name": "gustavo", "label": "Gustavo"}, {"name": "guest", "label": ""}], notes="hi"),
+          dev(id="nas", name="NAS", address="nas.lan", protocol="rdp", port=3390)])
+assert r["ok"], r
+out = load()
+by = {d["id"]: d for d in out["devices"]}
+assert by["gustavos-mac-mini"]["name"] == "Mac mini" and by["gustavos-mac-mini"]["alwaysOn"] is True
+assert [u["name"] for u in by["gustavos-mac-mini"]["users"]] == ["gustavo", "guest"]
+assert by["nas"]["source"] == "manual" and by["nas"]["host"] == "nas.lan" and by["nas"]["port"] == 3390
+mode = lambda p: stat.S_IMODE(os.stat(p).st_mode)
+assert mode(conf) == 0o600 and mode(os.path.dirname(conf)) == 0o700
+assert save([dev(id="a")])["ok"]
+assert os.path.exists(conf + ".bak") and mode(conf + ".bak") == 0o600
+assert "gustavos-mac-mini" in open(conf + ".bak").read()
+assert not [f for f in os.listdir(os.path.dirname(conf)) if f.startswith(".tmp-")]
+
+# ---- last used user + remmina profile
+save([dev(id="gustavos-mac-mini", match="gustavos-mac-mini", protocol="vnc",
+          users=[{"name": "gustavo", "label": ""}, {"name": "guest", "label": ""}]),
+      dev(id="aperture", protocol="ssh", users=[{"name": "root", "label": ""}])])
+p = run("profile", "gustavos-mac-mini", "guest")
+assert p.returncode == 0, p.stderr
+path = p.stdout.strip()
+assert path == os.path.join(home, ".local/share/expose-mucholove/remmina/gustavos-mac-mini-guest.remmina"), path
+text = open(path).read()
+assert "password=\n" in text and "server=100.1.1.1:5900" in text and "username=guest" in text
+assert "protocol=VNC" in text and "disablepasswordstoring=0" in text and "@" not in text
+assert mode(path) == 0o600 and mode(os.path.dirname(path)) == 0o700
+assert json.load(open(os.path.join(home, ".local/state/expose-mucholove/last-user.json"))) == {"gustavos-mac-mini": "guest"}
+assert {d["id"]: d for d in load()["devices"]}["gustavos-mac-mini"]["lastUser"] == "guest"
+assert run("profile", "gustavos-mac-mini", "nobody").returncode == 1   # not a configured user
+assert run("profile", "aperture", "root").returncode == 1               # ssh has no Remmina profile
+assert run("profile", "../x", "guest").returncode == 1
+assert run("used", "aperture", "root").returncode == 0
+
+# ---- hostile input is rejected, never written
+good = open(conf).read()
+bad = [
+    dev(id="../etc"), dev(id="a/b"), dev(id="a\nb"), dev(id="-x"), dev(id="x" * 65),
+    dev(match="a;b"), dev(match="$(id)"),
+    dev(name="line\nbreak"), dev(name="x" * 65), dev(name="esc\x1b[31m"),
+    dev(address="host;rm -rf /"), dev(address="a b"), dev(address="$(id)"), dev(address="-oProxyCommand=x"),
+    dev(address="fe80::1%eth0"), dev(address="x" * 300), dev(address="user:pw@host"),
+    dev(port=0), dev(port=70000), dev(port="22"), dev(port=True),
+    dev(protocol="telnet"), dev(alwaysOn="yes"),
+    dev(notes="n" * 501),
+    dev(users=[{"name": "a b"}]), dev(users=[{"name": "../x"}]), dev(users=[{"name": "u\nv"}]),
+    dev(users=[{"name": "-oProxyCommand=x"}]), dev(users=[{"name": "$(id)"}]), dev(users=[{"name": "a;b"}]),
+    dev(users=[{"name": "u" * 65}]), dev(users=[{"name": "dup"}, {"name": "dup"}]),
+    dev(users=[{"name": "ok", "label": "x" * 65}]), dev(users=[{"name": "ok", "label": "a\nb"}]),
+    dev(users=[{"name": "ok"}] * 17), dev(users="root"),
+]
+for entry in bad:
+    r = save([entry])
+    assert r["ok"] is False and r["errors"], entry
+assert save([dev(id="same"), dev(id="same")])["ok"] is False
+assert save("nope")["ok"] is False
+assert run("save", stdin="{not json").stdout.count('"ok": false') == 1
+assert open(conf).read() == good, "a rejected save must not change the file"
+
+# ---- no password anywhere: unknown keys dropped, nothing secret persisted or accepted
+r = save([dev(id="secret", password="hunter2", users=[{"name": "u", "password": "hunter3"}])])
+assert r["ok"]
+assert "hunter" not in open(conf).read() and "password" not in open(conf).read()
+assert "hunter" not in run("load").stdout
+
+# ---- malformed entries in an existing file are skipped without crashing
+open(conf, "w").write(json.dumps({"version": 1, "devices": [
+    {"id": "good", "protocol": "rdp", "address": "10.0.0.9"}, "junk", {"id": "bad id!"}, {"id": "../x"},
+    {"id": "good"}, {"id": "p", "port": 99999}, 5, None]}))
+out = load()
+assert [d["id"] for d in out["devices"] if d["source"] == "manual"] == ["good"], out["devices"]
+assert len(out["warnings"]) >= 5, out["warnings"]
+open(conf, "w").write("{broken")
+out = load()
+assert out["warnings"] and out["error"] == "" and len(out["devices"]) == 7
+
+# ---- symlinked config: refuse to read or write through it
+secret = os.path.join(home, "elsewhere.json")
+open(secret, "w").write(json.dumps({"version": 1, "devices": [dev(id="smuggled", address="1.2.3.4")]}))
+os.unlink(conf)
+os.symlink(secret, conf)
+out = load()
+assert "smuggled" not in {d["id"] for d in out["devices"]}
+assert any("symbolic link" in w for w in out["warnings"]), out["warnings"]
+r = save([dev(id="evil", address="9.9.9.9")])
+assert r["ok"] is False and "symbolic link" in r["errors"][0], r
+assert "evil" not in open(secret).read() and os.path.islink(conf)
+os.unlink(conf)
+
+# ---- legacy fallback: read-only
+open(os.path.join(home, ".config/omarchy/expose-macs.json"), "w").write(json.dumps(
+    {"macs": [{"match": "mini", "name": "Legacy mini", "alwaysOn": False, "user": "gustavo"}]}))
+out = load()
+assert out["configSource"] == "legacy"
+m = {d["id"]: d for d in out["devices"]}
+assert m["mini"]["name"] == "Legacy mini" and m["mini"]["expected"] is False and m["mini"]["ip"] == "100.1.1.1"
+assert m["mini"]["users"] == [{"name": "gustavo", "label": ""}]
+assert not os.path.exists(conf), "load must never write the new file"
+
+# ---- profile symlink target is replaced, not followed
+save([dev(id="gustavos-mac-mini", match="gustavos-mac-mini", protocol="vnc", users=[{"name": "u", "label": ""}])])
+prof = os.path.join(home, ".local/share/expose-mucholove/remmina/gustavos-mac-mini-u.remmina")
+victim = os.path.join(home, "victim")
+open(victim, "w").write("keep")
+os.symlink(victim, prof)
+assert run("profile", "gustavos-mac-mini", "u").returncode == 0
+assert open(victim).read() == "keep" and not os.path.islink(prof)
+# ---- Remmina plugin availability, from canned ldd output (no shell, no real ldd)
+sys.path.insert(0, root)
+import devices_core as core
+GOOD = "\tlibvncclient.so.1 => /usr/lib/libvncclient.so.1 (0x1)\n"
+BAD = "\tlibvncclient.so.1 => not found\n"
+def fake(vnc, rdp, rc_vnc=0, rc_rdp=0):
+    def ldd(argv):
+        assert argv[0] == "ldd" and isinstance(argv, list)
+        return (rc_vnc, vnc) if argv[1].endswith("vnc.so") else (rc_rdp, rdp)
+    return ldd
+assert core.client_check("vnc", True, fake(GOOD, GOOD)) == {"ok": True, "message": ""}
+r = core.client_check("vnc", True, fake(BAD, GOOD))
+assert not r["ok"] and r["message"].endswith("sudo pacman -S libvncserver"), r
+r = core.client_check("rdp", True, fake(GOOD, BAD))
+assert not r["ok"] and r["message"].endswith("sudo pacman -S freerdp"), r
+assert core.client_check("vnc", True, fake(GOOD, BAD))["ok"], "a broken RDP plugin must not block VNC"
+r = core.client_check("vnc", True, fake(BAD, BAD))
+assert r["message"].endswith("sudo pacman -S libvncserver freerdp"), r
+r = core.client_check("rdp", True, fake(BAD, BAD))
+assert r["message"].endswith("sudo pacman -S libvncserver freerdp"), r
+r = core.client_check("vnc", True, fake("ldd: error: No such file", GOOD, rc_vnc=1))
+assert not r["ok"] and "libvncserver" in r["message"], r
+r = core.client_check("vnc", False, fake(GOOD, GOOD))
+assert not r["ok"] and r["message"].endswith("sudo pacman -S remmina libvncserver freerdp"), r
+assert "gtk-vnc" not in r["message"].lower() and "gvnc" not in r["message"].lower()
+assert core.client_check("ssh", False)["ok"]
+print("PASS: device-config")
+EOF
