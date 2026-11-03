@@ -765,10 +765,10 @@ Item {
         if (!root.hotCornerEnabled || !root.hotCornerArmed)
             return;
         root.hotCornerArmed = false;
-        if (root.opened || root.openingPending) {
-            root.dismiss();
+        // Local patch: once open, the hot corner never closes Exposé; only a
+        // click on empty space, Escape, or choosing a window does.
+        if (root.opened || root.openingPending)
             return;
-        }
         var name = String(screenName || "");
         if (name) {
             root.overviewScreenPinned = true;
