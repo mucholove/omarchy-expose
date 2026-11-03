@@ -221,7 +221,8 @@ Item {
     // Refreshed with the probe; sidebar ages are relative to it.
     property real nowMs: Date.now()
     readonly property var focusedToplevel: Hyprland.activeToplevel
-    readonly property bool hideAgentWindows: !!root.pluginEntry && root.pluginEntry.hideAgentWindows === true
+    // On unless switched off: the sidebar lists AI sessions, so their windows stay out of the grid.
+    readonly property bool hideAgentWindows: !root.pluginEntry || root.pluginEntry.hideAgentWindows !== false
     readonly property bool showEndedSessions: !root.pluginEntry || root.pluginEntry.showEndedSessions !== false
     readonly property bool showArchivedSessions: !!root.pluginEntry && root.pluginEntry.showArchivedSessions === true
     property string sessionActionMessage: ""
@@ -1210,7 +1211,7 @@ Item {
             var top = candidates[index];
             if (root.workspaceScope === "current" && !root.isOnWorkspace(top, currentWorkspace))
                 continue;
-            if (root.hideAgentWindows && root.agentInfoFor(top).agent === "claude")
+            if (root.hideAgentWindows && root.agentInfoFor(top).agent)
                 continue;
             var haystack = WindowModel.searchTextFor(top);
             if (!needle || haystack.indexOf(needle) !== -1)

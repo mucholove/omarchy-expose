@@ -630,8 +630,8 @@ Item {
         }
 
         SwitchRow {
-            label: "Hide Claude Code windows"
-            hint: "Keep them out of the grid. The list here still jumps to them."
+            label: "Hide AI session windows"
+            hint: "Keep Claude Code and Codex windows out of the grid. Click a session here to jump to its window."
             checked: sidebar.controller.hideAgentWindows
             onToggled: sidebar.controller.setHideAgentWindows(!sidebar.controller.hideAgentWindows)
         }
