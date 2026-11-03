@@ -208,11 +208,16 @@ def read_json_file(path):
         raise ConfigError(f"cannot parse {path}: {exc}")
 
 
-def ensure_private_dir(path):
+def ensure_private_dir(path, tighten=True):
+    """Create path as 0700. An existing directory is tightened only when tighten is true:
+    directories this plugin owns are; shared ones like ~/.config/omarchy are left alone
+    (the file inside is 0600, which is what protects it)."""
     if os.path.islink(path):
         raise ConfigError(f"{path} is a symbolic link; refusing to use it")
+    existed = os.path.isdir(path)
     os.makedirs(path, mode=0o700, exist_ok=True)
-    os.chmod(path, 0o700)
+    if tighten or not existed:
+        os.chmod(path, 0o700)
 
 
 def atomic_write(path, text, mode=0o600):
@@ -317,7 +322,7 @@ def save_config(entries, default_protocols=None):
     keep = [e for e in clean_list if not (e["id"] in defaults and pristine(e, defaults[e["id"]]))]
     path = config_path()
     try:
-        ensure_private_dir(os.path.dirname(path))
+        ensure_private_dir(os.path.dirname(path), tighten=False)
         if os.path.islink(path):
             return False, [f"{path} is a symbolic link; refusing to write it"]
         if os.path.lexists(path):
