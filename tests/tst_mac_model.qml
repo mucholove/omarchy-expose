@@ -125,4 +125,17 @@ TestCase {
         verify(MacModel.anyMacMatches([pro, mini], "remmina", "100.87.204.116"));
         verify(!MacModel.anyMacMatches([], "remmina", "100.87.204.116"));
     }
+
+    function test_sortDevices() {
+        var list = [
+            { id: "b", name: "Bravo", state: "offline", lastUsedAt: 0 },
+            { id: "a", name: "alpha", state: "online", lastUsedAt: 0 },
+            { id: "c", name: "Charlie", state: "online", lastUsedAt: 50 },
+            { id: "d", name: "Delta", state: "offline", lastUsedAt: 90 }
+        ];
+        compare(MacModel.sortDevices(list, "recent").map(function (d) { return d.id; }).join(), "d,c,a,b");
+        compare(MacModel.sortDevices(list, "az").map(function (d) { return d.id; }).join(), "a,b,c,d");
+        compare(list[0].id, "b");
+        compare(MacModel.sortDevices(null, "az").length, 0);
+    }
 }

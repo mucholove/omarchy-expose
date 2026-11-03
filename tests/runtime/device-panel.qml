@@ -35,6 +35,8 @@ ShellRoot {
                         hidden: false, notes: "", users: [] } }
         ] })
         readonly property var macList: macResults.devices
+        readonly property string deviceSort: "recent"
+        function setDeviceSort(value) {}
         function closeDevices() { closed++; }
         function devicesSaved() {}
         function openDevices() {}

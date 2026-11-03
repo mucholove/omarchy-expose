@@ -6,7 +6,7 @@ test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT
 ln -s /usr/share/omarchy/shell/Commons "$test_dir/Commons"
 ln -s /usr/share/omarchy/shell/Ui "$test_dir/Ui"
-cp MacRow.qml MacModel.js WindowModel.js DeviceModel.js DeviceButton.qml DeviceSwitch.qml DeviceField.qml DeviceEditor.qml DevicePanel.qml "$test_dir/"
+cp SortToggle.qml MacRow.qml MacModel.js WindowModel.js DeviceModel.js DeviceButton.qml DeviceSwitch.qml DeviceField.qml DeviceEditor.qml DevicePanel.qml "$test_dir/"
 cp tests/runtime/device-panel.qml "$test_dir/shell.qml"
 QT_QPA_PLATFORM=offscreen timeout 15s quickshell --no-color -p "$test_dir/shell.qml" > "$test_dir/output" 2>&1 || {
   cat "$test_dir/output"

@@ -116,6 +116,13 @@ TestCase {
         compare(AgentModel.ageStep(99).ms, 0);
         compare(AgentModel.ageStep("x").label, "any time");
         verify(AgentModel.matchesFilter({ status: "shell", statusAt: now }, "working", 0, now));
+        var az = { sessions: [
+            { name: "zed", nameSource: "user", status: "idle", statusAt: now - 1000 },
+            { name: "Alpha", nameSource: "user", status: "idle", statusAt: now - 5000 },
+            { name: "mid", nameSource: "user", status: "idle", statusAt: now - 3000 }
+        ] };
+        compare(names(AgentModel.sessionRows(az, now, { sort: "az" })).join(), "Alpha,mid,zed");
+        compare(names(AgentModel.sessionRows(az, now, { sort: "recent" })).join(), "zed,mid,Alpha");
     }
 
     function test_projectLabel() {

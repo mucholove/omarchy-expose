@@ -17,6 +17,7 @@ Item {
         showOlder: sidebar.controller.showOlderSessions,
         showEnded: sidebar.controller.showEndedSessions,
         showArchived: sidebar.controller.showArchivedSessions,
+        sort: sidebar.controller.sessionSort,
         status: sidebar.controller.sessionStatusFilter,
         maxAgeMs: AgentModel.ageStep(sidebar.controller.sessionAgeIndex).ms
     })
@@ -188,6 +189,15 @@ Item {
                     font.family: Style.font.menuFamily
                     font.pixelSize: Style.font.caption
                 }
+            }
+
+            SortToggle {
+                anchors.right: gear.left
+                anchors.rightMargin: Style.spacing.md
+                anchors.top: parent.top
+                height: Style.space(34)
+                value: sidebar.controller.sessionSort
+                onPicked: function (key) { sidebar.controller.setSessionSort(key); }
             }
 
             Rectangle {

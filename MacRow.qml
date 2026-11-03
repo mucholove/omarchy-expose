@@ -13,7 +13,8 @@ Item {
     id: row
 
     required property var controller
-    readonly property var macs: row.controller.macList.filter(function (d) { return d.hidden !== true; })
+    readonly property var macs: MacModel.sortDevices(
+        row.controller.macList.filter(function (d) { return d.hidden !== true; }), row.controller.deviceSort)
 
     implicitHeight: Style.space(34) + (row.macs.length > 0 ? Style.space(184) : 0)
 
@@ -36,6 +37,15 @@ Item {
             font.family: Style.font.menuFamily
             font.pixelSize: Style.font.body
             font.bold: true
+        }
+
+        SortToggle {
+            anchors.right: gear.left
+            anchors.rightMargin: Style.spacing.md
+            anchors.verticalCenter: parent.verticalCenter
+            value: row.controller.deviceSort
+            outlined: true
+            onPicked: function (key) { row.controller.setDeviceSort(key); }
         }
 
         Rectangle {
@@ -78,6 +88,21 @@ Item {
         clip: true
         model: row.macs
         boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.HorizontalFlick
+
+        // Two-finger horizontal swipe (or a mouse wheel) scrolls the row sideways.
+        WheelHandler {
+            acceptedDevices: PointerDevice.TouchPad | PointerDevice.Mouse
+            onWheel: function (event) {
+                var dx = event.pixelDelta.x !== 0 ? event.pixelDelta.x
+                    : (event.angleDelta.x !== 0 ? event.angleDelta.x / 2 : 0);
+                var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y
+                    : (event.angleDelta.y !== 0 ? event.angleDelta.y / 2 : 0);
+                var move = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+                var max = Math.max(0, list.contentWidth - list.width);
+                list.contentX = Math.max(0, Math.min(max, list.contentX - move));
+            }
+        }
 
         delegate: Rectangle {
             id: card
@@ -95,7 +120,9 @@ Item {
             property bool choosing: false
             readonly property color ink: Commons.Color.menu.text
 
-            width: Style.space(340)
+            // Share the row when there are only a few devices; keep a floor and scroll beyond it.
+            width: Math.max(Style.space(230), Math.min(Style.space(340),
+                (list.width - Style.spacing.sm * (list.count - 1)) / Math.max(1, list.count)))
             height: list.height
             radius: Style.cornerRadius
             color: Qt.rgba(Commons.Color.menu.background.r, Commons.Color.menu.background.g, Commons.Color.menu.background.b, 0.72)

@@ -236,6 +236,8 @@ Item {
         return isFinite(value) && value >= 0 && value < AgentModel.AGE_STEPS.length
             ? Math.round(value) : AgentModel.AGE_STEPS.length - 1;
     }
+    readonly property string deviceSort: root.pluginEntry && root.pluginEntry.deviceSort === "az" ? "az" : "recent"
+    readonly property string sessionSort: root.pluginEntry && root.pluginEntry.sessionSort === "az" ? "az" : "recent"
     readonly property bool showArchivedSessions: !!root.pluginEntry && root.pluginEntry.showArchivedSessions === true
     property string sessionActionMessage: ""
     readonly property bool showOlderSessions: !root.pluginEntry || root.pluginEntry.showOlderSessions !== false
@@ -1038,6 +1040,14 @@ Item {
 
     function setShowActivity(enabled) {
         root.updatePluginSetting("showActivity", enabled === true);
+    }
+
+    function setDeviceSort(value) {
+        root.updatePluginSetting("deviceSort", value === "az" ? "az" : "recent");
+    }
+
+    function setSessionSort(value) {
+        root.updatePluginSetting("sessionSort", value === "az" ? "az" : "recent");
     }
 
     function setSessionStatusFilter(value) {
@@ -2554,7 +2564,9 @@ Item {
                                     var screenRatio = overviewWindow.screen && overviewWindow.screen.height > 0
                                         ? overviewWindow.screen.width / overviewWindow.screen.height
                                         : 0;
-                                    return root.computeWindowLayout(overviewWindow.screenToplevels, width, height, Style.space(64), Style.spacing.sm, root.windowFooterHeight, screenRatio);
+                                    // Leave room under the cards for the floating activity panel so it never covers a title.
+                                var reserved = floatingActivity.visible ? floatingActivity.height + Style.spacing.md : 0;
+                                return root.computeWindowLayout(overviewWindow.screenToplevels, width, Math.max(1, height - reserved), Style.space(64), Style.spacing.sm, root.windowFooterHeight, screenRatio);
                                 }
 
                                 // Activity floats over the card space, on the edge next to the session

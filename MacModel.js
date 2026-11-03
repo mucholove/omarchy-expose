@@ -232,3 +232,23 @@ function anyMacMatches(macs, appId, title) {
             return true;
     return false;
 }
+
+// Order devices for the row: "recent" puts the most recently connected first (never
+// connected ones after, online before offline), "az" sorts by name. Returns a new list.
+function sortDevices(list, mode) {
+    var items = (list || []).slice();
+    var name = function (d) { return String(d.name || d.hostname || d.id || "").toLowerCase(); };
+    items.sort(function (a, b) {
+        if (mode !== "az") {
+            var ua = Number(a.lastUsedAt) || 0, ub = Number(b.lastUsedAt) || 0;
+            if (ua !== ub)
+                return ub - ua;
+            var oa = a.state === "online" ? 1 : 0, ob = b.state === "online" ? 1 : 0;
+            if (oa !== ob)
+                return ob - oa;
+        }
+        var na = name(a), nb = name(b);
+        return na < nb ? -1 : (na > nb ? 1 : 0);
+    });
+    return items;
+}

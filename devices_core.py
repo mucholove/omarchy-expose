@@ -351,12 +351,27 @@ def last_users():
             and isinstance(v, str) and USER_RE.match(v)}
 
 
+def last_used_times():
+    """Device id -> epoch seconds of the last Connect, for the "recent" ordering."""
+    try:
+        data = read_json_file(os.path.join(state_dir(), "last-used.json"))
+    except ConfigError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: float(v) for k, v in data.items() if isinstance(k, str) and ID_RE.match(k)
+            and isinstance(v, (int, float)) and not isinstance(v, bool)}
+
+
 def remember_user(dev_id, user):
     data = last_users()
     data[dev_id] = user
+    times = last_used_times()
+    times[dev_id] = time.time()
     try:
         ensure_private_dir(state_dir())
         atomic_write(os.path.join(state_dir(), "last-user.json"), json.dumps(data))
+        atomic_write(os.path.join(state_dir(), "last-used.json"), json.dumps(times))
     except (OSError, ConfigError):
         pass
 

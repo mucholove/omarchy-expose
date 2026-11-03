@@ -129,12 +129,16 @@ function sessionGroup(session, nowMs) {
 
 var GROUP_TITLES = ["Working", "Waiting for you", "Older", "Not running", "Archived"];
 
-function sortedSessions(results, nowMs) {
+function sortedSessions(results, nowMs, alphabetical) {
     var list = results && results.sessions ? results.sessions.slice() : [];
     list.sort(function (a, b) {
         var ga = a.archived ? 4 : sessionGroup(a, nowMs), gb = b.archived ? 4 : sessionGroup(b, nowMs);
         if (ga !== gb)
             return ga - gb;
+        if (alphabetical) {
+            var ta = sessionTitle(a).toLowerCase(), tb = sessionTitle(b).toLowerCase();
+            return ta < tb ? -1 : (ta > tb ? 1 : 0);
+        }
         return (Number(b.statusAt) || 0) - (Number(a.statusAt) || 0);
     });
     return list;
@@ -194,7 +198,7 @@ function sessionRows(results, nowMs, options) {
     var maxAgeMs = options && typeof options === "object" ? Number(options.maxAgeMs) || 0 : 0;
     var rows = [];
     var last = -1;
-    var list = sortedSessions(results, nowMs);
+    var list = sortedSessions(results, nowMs, !!(options && typeof options === "object" && options.sort === "az"));
     for (var i = 0; i < list.length; i++) {
         if (!matchesFilter(list[i], status, maxAgeMs, nowMs))
             continue;
