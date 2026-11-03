@@ -653,6 +653,13 @@ Item {
         }
 
         SwitchRow {
+            label: "Show Macs"
+            hint: "Your Macs on Tailscale, with Connect and an always-on warning."
+            checked: sidebar.controller.showMacs
+            onToggled: sidebar.controller.setShowMacs(!sidebar.controller.showMacs)
+        }
+
+        SwitchRow {
             label: "Show sessions that ended"
             hint: "Recent sessions with no running Claude Code, to resume."
             checked: sidebar.controller.showEndedSessions

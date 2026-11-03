@@ -11,6 +11,7 @@ macOS-style Exposé for Omarchy: one key or a hot corner shows every open window
 - **Search.** Just start typing to filter windows by title or application.
 - **Workspace scope.** Press Tab to switch between every window and windows on the current workspace, and pick which of the two the overview opens with. Per-monitor mode evaluates the current workspace of the selected display.
 - **Multi-monitor layouts.** Every display blurs and dims, with one grid on the focused display (or the display whose hot corner was used). All displays shows every window there; This display keeps that display's own windows.
+- **Macs.** Your Macs on Tailscale appear as a row of cards with online/sleeping/offline status, an always-on warning, and a Connect button (Remmina, TigerVNC or KRDC; `sudo pacman -S remmina`). Optional `~/.config/omarchy/expose-macs.json`: `{"macs":[{"match":"mini","name":"Mac mini","alwaysOn":true,"user":"gustavo"}]}`. Toggle with `omarchy-shell expose macs on|off`.
 - **Built for Omarchy.** Runs inside Omarchy Shell, follows the active theme, and adds no packages, services, or daemons.
 - **Hot corner.** Toggle the overview by flinging the pointer into a corner. Uses the outermost display by default, with an option for all displays.
 

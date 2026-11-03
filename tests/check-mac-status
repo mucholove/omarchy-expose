@@ -1,0 +1,25 @@
+#!/bin/bash
+# Run mac-status on canned tailscale JSON and check the classification.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+./mac-status --fixture tests/mac/tailscale.json | python3 -c '
+import json, sys
+out = json.load(sys.stdin)
+macs = {m["id"]: m for m in out["macs"]}
+assert out["error"] == "", out
+assert "pixel" not in macs, "non-Mac peer listed"
+assert len(macs) == 5, sorted(macs)
+mini, air, pro = macs["gustavos-mac-mini"], macs["gustavos-macbook-air"], macs["gustavos-macbook-pro"]
+assert (mini["state"], mini["alwaysOn"], mini["user"]) == ("online", True, "gustavo"), mini
+assert mini["screenSharing"] and mini["ard"] and mini["ssh"], mini
+assert (air["state"], air["alwaysOn"], air["sleepMinutes"], air["wakeForNetwork"]) == ("sleeps", False, 10, False), air
+assert air["reasons"][0] == "sleeps after 10 min", air
+assert not air["screenSharing"], air
+assert (pro["state"], pro["alwaysOn"]) == ("sleeps", False), pro
+assert pro["reasons"] == ["offline 3h"], pro
+studio = macs["mac-studio"]
+assert (studio["state"], studio["alwaysOn"]) == ("online", None), studio
+imac = macs["old-imac"]
+assert (imac["name"], imac["state"], imac["expected"]) == ("Studio iMac", "offline", False), imac
+print("PASS: mac-status classification")
+'

@@ -10,6 +10,7 @@ import qs.Ui as Ui // qmllint disable import
 import "IconResolver.js" as IconResolver
 import "WindowModel.js" as WindowModel
 import "AgentModel.js" as AgentModel
+import "MacModel.js" as MacModel
 import "ScreenLayout.js" as ScreenLayout
 
 Item {
@@ -228,6 +229,13 @@ Item {
     readonly property bool showArchivedSessions: !!root.pluginEntry && root.pluginEntry.showArchivedSessions === true
     property string sessionActionMessage: ""
     readonly property bool showOlderSessions: !root.pluginEntry || root.pluginEntry.showOlderSessions !== false
+    readonly property bool showMacs: !root.pluginEntry || root.pluginEntry.showMacs !== false
+    // From ./mac-status, refreshed on open and every 15 s while open.
+    property var macResults: ({ macs: [], error: "" })
+    readonly property var macList: root.showMacs ? (root.macResults.macs || []) : []
+    property real macNowMs: Date.now()
+    property string macMessage: ""
+    property var pendingMac: null
     readonly property bool sessionSidebarEnabled: !root.pluginEntry || root.pluginEntry.sessionSidebar !== false
     readonly property string homeDirectory: Quickshell.env("HOME") || ""
     property int modelRevision: 0
@@ -894,6 +902,44 @@ Item {
         root.setWorkspaceScope(root.workspaceScope === "all" ? "current" : "all");
     }
 
+    function refreshMacs() {
+        if (!root.showMacs || macProbe.running)
+            return;
+        macProbe.command = [root.pluginDir + "/mac-status"];
+        macProbe.running = true;
+    }
+
+    // The remote-desktop window showing this Mac, if one is open.
+    function macWindowFor(mac) {
+        for (var i = 0; i < root.allToplevels.length; i++) {
+            var top = root.allToplevels[i];
+            if (WindowModel.isEligible(top) && MacModel.windowMatches(mac, WindowModel.appIdFor(top), String(top.title || "")))
+                return top;
+        }
+        return null;
+    }
+
+    function setShowMacs(enabled) {
+        root.updatePluginSetting("showMacs", enabled === true);
+        root.modelRevision++;
+        if (enabled === true)
+            Qt.callLater(root.refreshMacs);
+    }
+
+    // Finds a remote-desktop client when clicked, then launches it on the Mac's
+    // Tailscale address, or explains how to install one.
+    function connectMac(mac) {
+        if (!MacModel.canConnect(mac) || clientProbe.running)
+            return;
+        root.pendingMac = mac;
+        clientProbe.running = true;
+    }
+
+    function showMacMessage(text) {
+        root.macMessage = text;
+        macMessageTimer.restart();
+    }
+
     function refreshAgents() {
         var pids = [];
         for (var i = 0; i < root.allToplevels.length; i++) {
@@ -997,6 +1043,7 @@ Item {
 
     function refreshHyprlandState() {
         root.refreshAgents();
+        root.refreshMacs();
         Hyprland.refreshMonitors();
         Hyprland.refreshWorkspaces();
         Hyprland.refreshToplevels();
@@ -1217,6 +1264,8 @@ Item {
             if (root.workspaceScope === "current" && !root.isOnWorkspace(top, currentWorkspace))
                 continue;
             if (root.hideAgentWindows && root.agentInfoFor(top).agent)
+                continue;
+            if (root.showMacs && MacModel.anyMacMatches(root.macList, WindowModel.appIdFor(top), String(top.title || "")))
                 continue;
             var haystack = WindowModel.searchTextFor(top);
             if (!needle || haystack.indexOf(needle) !== -1)
@@ -1671,6 +1720,49 @@ Item {
         onTriggered: root.refreshAgents()
     }
 
+    Timer {
+        interval: 15000
+        repeat: true
+        running: root.opened && root.showMacs
+        onTriggered: root.refreshMacs()
+    }
+
+    Process {
+        id: macProbe
+        stdout: StdioCollector {
+            onStreamFinished: {
+                root.macNowMs = Date.now();
+                root.macResults = MacModel.parseResult(this.text);
+                root.modelRevision++;
+            }
+        }
+    }
+
+    Process {
+        id: clientProbe
+        command: ["sh", "-c", "for c in remmina vncviewer krdc; do command -v $c >/dev/null && echo $c; done"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                var mac = root.pendingMac;
+                root.pendingMac = null;
+                var found = String(this.text).split("\n").filter(function (x) { return x; });
+                var argv = mac ? MacModel.clientCommand(found, mac) : [];
+                if (!argv.length) {
+                    root.showMacMessage(MacModel.noClientMessage());
+                    return;
+                }
+                Quickshell.execDetached(["setsid", "uwsm-app", "--"].concat(argv));
+                root.dismiss();
+            }
+        }
+    }
+
+    Timer {
+        id: macMessageTimer
+        interval: 12000
+        onTriggered: root.macMessage = ""
+    }
+
     Process {
         id: sessionActionProbe
         stdout: StdioCollector {
@@ -1905,6 +1997,12 @@ Item {
             if (mode !== "on" && mode !== "off")
                 return root.expectedOneOf(["on", "off"]);
             root.setSessionSidebar(mode === "on");
+            return mode;
+        }
+        function macs(mode: string): string {
+            if (mode !== "on" && mode !== "off")
+                return root.expectedOneOf(["on", "off"]);
+            root.setShowMacs(mode === "on");
             return mode;
         }
         function hotCornerAllDisplays(mode: string): string {
@@ -2310,6 +2408,33 @@ Item {
                             visible: overviewWindow.acceptsKeyboard && root.sessionSidebarEnabled
                         }
 
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            spacing: Style.spacing.sm
+
+                            MacRow {
+                                controller: root
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: implicitHeight
+                                visible: overviewWindow.acceptsKeyboard && root.macList.length > 0
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                visible: root.macMessage !== "" && overviewWindow.acceptsKeyboard
+                                text: root.macMessage
+                                textFormat: Text.PlainText
+                                wrapMode: Text.Wrap
+                                horizontalAlignment: Text.AlignHCenter
+                                style: Text.Outline
+                                styleColor: Qt.rgba(0, 0, 0, 0.55)
+                                color: "#F59E0B"
+                                font.family: Style.font.menuFamily
+                                font.pixelSize: Style.font.body
+                                font.bold: true
+                            }
+
                             Item {
                                 id: overviewArea
                                 Layout.fillWidth: true
@@ -2378,7 +2503,7 @@ Item {
                                     font.pixelSize: Style.font.display
                                 }
                             }
-
+                        }
                     }
 
                     RowLayout {

@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""List the Macs on this tailnet with their remote-desktop and always-on status.
+
+Usage: mac-status [--fixture FILE] [--no-ssh]
+Prints JSON {"macs": [...], "checkedAt": epoch, "error": ""}.
+
+Macs come from `tailscale status --json` (peers whose OS is macOS). Each is
+probed concurrently for TCP 5900 (Screen Sharing/VNC), 3283 (Apple Remote
+Desktop) and 22 (SSH). When SSH answers without a password, a read-only
+`pmset -g custom` says whether the Mac sleeps; the answer is cached for 10
+minutes in ~/.local/state/expose-mucholove/. SSH is only ever tried with
+BatchMode, so a failure is just "unknown".
+
+Optional ~/.config/omarchy/expose-macs.json:
+  {"macs": [{"match": "mini", "name": "Mac mini", "alwaysOn": true, "user": "gustavo"}]}
+"match" is a case-insensitive substring of the host name or IP. alwaysOn
+(default true) says whether the Mac is EXPECTED to stay on.
+
+--fixture FILE reads canned tailscale JSON instead and skips every network and
+disk side effect. An optional "_fixture" object supplies the rest:
+  {"now": epoch, "ports": {"<ip>": [5900, 22]}, "pmset": {"<ip>": "<pmset text>"},
+   "config": {...same shape as the config file...}}
+"""
+import concurrent.futures
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
+
+PORTS = {"screenSharing": 5900, "ard": 3283, "ssh": 22}
+PROBE_TIMEOUT = 1.0
+PMSET_TTL = 600
+# A Mac that dropped off this recently is most likely asleep, not shut down.
+RECENT_OFFLINE = 12 * 3600
+STATE_DIR = os.path.expanduser("~/.local/state/expose-mucholove")
+CONFIG_PATH = os.path.expanduser("~/.config/omarchy/expose-macs.json")
+
+
+def parse_time(text):
+    """RFC 3339 timestamp (nanoseconds, any offset) to epoch seconds; 0 if unset."""
+    if not text or text.startswith("0001-"):
+        return 0
+    m = re.match(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)?$", text)
+    if not m:
+        return 0
+    y, mo, d, h, mi, s, tz = m.groups()
+    import calendar
+    epoch = calendar.timegm((int(y), int(mo), int(d), int(h), int(mi), int(s)))
+    if tz and tz != "Z":
+        sign = 1 if tz[0] == "+" else -1
+        epoch -= sign * (int(tz[1:3]) * 3600 + int(tz[4:6]) * 60)
+    return epoch
+
+
+def mac_peers(status):
+    """Tailscale peers running macOS, as plain dicts."""
+    peers = []
+    for peer in (status.get("Peer") or {}).values():
+        if str(peer.get("OS", "")).lower() not in ("macos", "darwin"):
+            continue
+        ips = [ip for ip in peer.get("TailscaleIPs") or [] if ":" not in ip]
+        if not ips:
+            continue
+        dns = str(peer.get("DNSName", "")).rstrip(".")
+        label = dns.split(".")[0] if dns else str(peer.get("HostName", ""))
+        peers.append({
+            "id": label,
+            "hostName": str(peer.get("HostName", "")),
+            "ip": ips[0],
+            "online": peer.get("Online") is True,
+            "lastSeen": parse_time(str(peer.get("LastSeen", ""))),
+        })
+    return sorted(peers, key=lambda p: p["id"])
+
+
+def config_for(peer, config):
+    needle = [peer["id"].lower(), peer["hostName"].lower(), peer["ip"]]
+    for entry in (config or {}).get("macs") or []:
+        match = str(entry.get("match", "")).lower()
+        if match and any(match in item for item in needle):
+            return entry
+    return {}
+
+
+def parse_pmset(text):
+    """AC-power sleep minutes and wake-on-network from `pmset -g [custom]`.
+
+    Returns {"sleep": int|None, "womp": bool|None}; None when not present.
+    `pmset -g custom` has "AC Power:" / "Battery Power:" sections, `pmset -g`
+    one flat list of the current settings.
+    """
+    section, values = "", {}
+    for line in str(text).splitlines():
+        stripped = line.strip()
+        if stripped.endswith(":") and " " in stripped.rstrip(":"):
+            section = stripped.lower()
+            continue
+        m = re.match(r"^(\w+)\s+(\d+)\b", stripped)
+        if not m:
+            continue
+        key, value = m.group(1), int(m.group(2))
+        if section.startswith("battery"):
+            continue
+        values.setdefault(key, value)
+    sleep, womp = values.get("sleep"), values.get("womp")
+    return {"sleep": sleep, "womp": None if womp is None else womp != 0}
+
+
+def duration(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 90:
+        return "moments"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+def classify(online, last_seen, now, power, expected=True):
+    """State, always-on verdict and reasons from facts.
+
+    power is {"sleep": int|None, "womp": bool|None} or None when unknown.
+    alwaysOn: True/False, or None (unknown) when online but power settings
+    could not be read.
+    """
+    reasons = []
+    sleep = power.get("sleep") if power else None
+    if not online:
+        age = now - last_seen if last_seen else None
+        recent = age is not None and age < RECENT_OFFLINE
+        reasons.append(f"offline {duration(age)}" if age is not None else "offline")
+        return {"state": "sleeps" if recent else "offline", "alwaysOn": False, "reasons": reasons}
+    if sleep is None:
+        return {"state": "online", "alwaysOn": None, "reasons": ["power settings unknown"]}
+    if sleep > 0:
+        reasons.append(f"sleeps after {sleep} min")
+        if power.get("womp") is False:
+            reasons.append("Wake for network access is off")
+        return {"state": "sleeps", "alwaysOn": False, "reasons": reasons}
+    if power.get("womp") is False:
+        reasons.append("Wake for network access is off")
+    return {"state": "online", "alwaysOn": True, "reasons": reasons}
+
+
+def port_open(ip, port):
+    try:
+        with socket.create_connection((ip, port), PROBE_TIMEOUT):
+            return True
+    except OSError:
+        return False
+
+
+def cached_power(ip, user):
+    """Power settings via cache or a BatchMode ssh; None when unavailable."""
+    path = os.path.join(STATE_DIR, "pmset-" + re.sub(r"[^0-9a-zA-Z.]", "_", ip) + ".json")
+    try:
+        with open(path) as f:
+            cached = json.load(f)
+        if time.time() - float(cached.get("at", 0)) < PMSET_TTL and cached.get("user") == user:
+            return cached.get("power")
+    except (OSError, ValueError):
+        pass
+    power = None
+    target = f"{user}@{ip}" if user else ip
+    try:
+        for command in ("pmset -g custom", "pmset -g"):
+            out = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", target, command],
+                capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL)
+            if out.returncode == 0:
+                parsed = parse_pmset(out.stdout)
+                if parsed["sleep"] is not None:
+                    power = parsed
+                    break
+    except (OSError, subprocess.SubprocessError):
+        power = None
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"at": time.time(), "user": user, "power": power}, f)
+    except OSError:
+        pass
+    return power
+
+
+def build(status, config, now, probe, power_of):
+    macs = []
+    peers = mac_peers(status)
+
+    def one(peer):
+        entry = config_for(peer, config)
+        user = str(entry.get("user", "")) if entry else ""
+        ports = probe(peer) if peer["online"] else set()
+        power = power_of(peer, user) if peer["online"] and 22 in ports else None
+        verdict = classify(peer["online"], peer["lastSeen"], now, power)
+        return {
+            "id": peer["id"],
+            "name": str(entry.get("name") or peer["hostName"] or peer["id"]),
+            "hostName": peer["hostName"],
+            "ip": peer["ip"],
+            "user": user,
+            "online": peer["online"],
+            "lastSeen": peer["lastSeen"],
+            "screenSharing": PORTS["screenSharing"] in ports,
+            "ard": PORTS["ard"] in ports,
+            "ssh": PORTS["ssh"] in ports,
+            "sleepMinutes": power["sleep"] if power else None,
+            "wakeForNetwork": power["womp"] if power else None,
+            "expected": entry.get("alwaysOn", True) is not False if entry else True,
+            **verdict,
+        }
+
+    if not peers:
+        return macs
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(peers) * 2)) as pool:
+        return list(pool.map(one, peers))
+
+
+def main(argv):
+    fixture = None
+    use_ssh = "--no-ssh" not in argv
+    if "--fixture" in argv:
+        fixture = argv[argv.index("--fixture") + 1]
+    error = ""
+    try:
+        if fixture:
+            with open(fixture) as f:
+                status = json.load(f)
+            extra = status.get("_fixture") or {}
+            now = float(extra.get("now", time.time()))
+            config = extra.get("config") or {}
+            fixed_ports = extra.get("ports") or {}
+            fixed_pmset = extra.get("pmset") or {}
+
+            def probe(peer):
+                return set(fixed_ports.get(peer["ip"], []))
+
+            def power_of(peer, user):
+                text = fixed_pmset.get(peer["ip"])
+                return parse_pmset(text) if text else None
+        else:
+            out = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=4)
+            status = json.loads(out.stdout or "{}")
+            now = time.time()
+            try:
+                with open(CONFIG_PATH) as f:
+                    config = json.load(f)
+            except (OSError, ValueError):
+                config = {}
+
+            def probe(peer):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(PORTS)) as pool:
+                    results = pool.map(lambda port: (port, port_open(peer["ip"], port)), PORTS.values())
+                    return {port for port, ok in results if ok}
+
+            def power_of(peer, user):
+                return cached_power(peer["ip"], user) if use_ssh else None
+        macs = build(status, config, now, probe, power_of)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        macs, now, error = [], time.time(), str(exc)
+    print(json.dumps({"macs": macs, "checkedAt": int(now), "error": error}))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
