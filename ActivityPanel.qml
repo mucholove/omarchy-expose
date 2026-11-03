@@ -34,8 +34,10 @@ Item {
             Layout.preferredWidth: Style.space(34)
             text: meter.label
             textFormat: Text.PlainText
+            style: Text.Outline
+            styleColor: Qt.rgba(0, 0, 0, 0.55)
             color: Commons.Color.menu.text
-            opacity: 0.6
+            opacity: 0.85
             font.family: Style.font.menuFamily
             font.pixelSize: Style.font.caption
         }
@@ -44,7 +46,7 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: Style.space(8)
             radius: height / 2
-            color: Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.14)
+            color: Qt.rgba(1, 1, 1, 0.2)
 
             Rectangle {
                 width: parent.width * Math.max(meter.value, meter.value > 0 ? 0.02 : 0)
@@ -61,6 +63,8 @@ Item {
             horizontalAlignment: Text.AlignRight
             text: meter.detail
             textFormat: Text.PlainText
+            style: Text.Outline
+            styleColor: Qt.rgba(0, 0, 0, 0.55)
             color: Commons.Color.menu.text
             opacity: 0.8
             font.family: Style.font.menuFamily
@@ -101,7 +105,7 @@ Item {
                     Rectangle {
                         anchors.fill: parent
                         radius: 2
-                        color: Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.1)
+                        color: Qt.rgba(1, 1, 1, 0.16)
                     }
 
                     Rectangle {
@@ -143,6 +147,8 @@ Item {
             text: "AI sessions: " + panel.totals.count + " running, "
                 + AgentModel.cpuText(panel.totals.cpu) + ", " + AgentModel.memText(panel.totals.rssBytes)
             textFormat: Text.PlainText
+            style: Text.Outline
+            styleColor: Qt.rgba(0, 0, 0, 0.55)
             color: Commons.Color.menu.text
             opacity: 0.7
             font.family: Style.font.menuFamily

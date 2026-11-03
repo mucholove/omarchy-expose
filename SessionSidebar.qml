@@ -38,37 +38,14 @@ Item {
         model: sidebar.settingsShown ? [] : sidebar.rows
         boundsBehavior: Flickable.StopAtBounds
 
-        // The header grows once the first activity reading arrives; keep the view on it.
-        Connections {
-            target: list.headerItem
-            function onHeightChanged() { if (!list.moving) list.positionViewAtBeginning(); }
-        }
-
-        Component.onCompleted: list.positionViewAtBeginning()
-
         header: Item {
             width: list.width
-            height: Style.space(34) + (activity.visible && sidebar.controller.showActivity ? activity.implicitHeight + Style.spacing.md : 0)
-
-            ActivityPanel {
-                id: activity
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.topMargin: Style.space(34)
-                anchors.leftMargin: Style.spacing.sm
-                anchors.rightMargin: Style.spacing.sm
-                visible: sidebar.controller.showActivity && hasData
-                system: sidebar.controller.agentResults.system || ({})
-                totals: AgentModel.sessionTotals(sidebar.controller.agentResults)
-            }
+            height: Style.space(34)
 
             Text {
                 anchors.left: parent.left
                 anchors.leftMargin: Style.spacing.sm
-                anchors.top: parent.top
-                height: Style.space(34)
-                verticalAlignment: Text.AlignVCenter
+                anchors.verticalCenter: parent.verticalCenter
                 text: sidebar.rows.length ? "AI sessions" : "No AI sessions"
                 textFormat: Text.PlainText
                 color: Commons.Color.menu.text
@@ -84,8 +61,7 @@ Item {
                 height: width
                 radius: Style.cornerRadius
                 anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.topMargin: Style.space(3)
+                anchors.verticalCenter: parent.verticalCenter
                 color: sidebar.settingsShown || gearMouse.containsMouse
                     ? Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.16)
                     : "transparent"

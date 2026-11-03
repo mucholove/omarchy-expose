@@ -2322,6 +2322,21 @@ Item {
                                     return root.computeWindowLayout(overviewWindow.screenToplevels, width, height, Style.space(64), Style.spacing.sm, root.windowFooterHeight, screenRatio);
                                 }
 
+                                // Activity floats over the card space, on the edge next to the session
+                                // list, with no background of its own.
+                                ActivityPanel {
+                                    id: floatingActivity
+                                    z: 50
+                                    anchors.left: parent.left
+                                    anchors.bottom: parent.bottom
+                                    anchors.leftMargin: Style.spacing.sm
+                                    anchors.bottomMargin: Style.spacing.xs
+                                    width: Style.space(270)
+                                    visible: root.showActivity && overviewWindow.acceptsKeyboard && hasData
+                                    system: root.agentResults.system || ({})
+                                    totals: AgentModel.sessionTotals(root.agentResults)
+                                }
+
                                 Item {
                                     id: cardLayer
                                     anchors.fill: parent
